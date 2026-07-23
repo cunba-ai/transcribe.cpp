@@ -1,0 +1,440 @@
+name: C ABI Build
+
+# Builds the C ABI shared library (libtranscribe.so / transcribe.dll) for each
+# GPU backend, mirroring audio.cpp's capi-build.yml. Produces a full CMake
+# install tree per backend — lib/*.so + lib/transcribe-link.json + include/ +
+# bin/*.dll — so downstream Rust crates can consume it via
+# TRANSCRIBE_PREBUILT_PREFIX without a C++ toolchain or GPU SDK.
+#
+# Linux jobs run in vendor containers (CUDA/ROCm/SYCL) and are the reliable
+# signal. Windows CUDA must pass; Windows ROCm and SYCL are best-effort
+# (continue-on-error): hosted runners have no AMD/Intel GPU, so they only
+# prove MSVC/HIP-clang/icpx configure/compile, and the vendor toolchains are
+# large/flaky.
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - capi/**
+    paths:
+      - '.github/workflows/capi-build.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/**'
+      - 'include/**'
+      - 'ggml/CMakeLists.txt'
+      - 'ggml/cmake/**'
+      - 'ggml/include/**'
+      - 'ggml/src/**'
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # needed to save toolchain caches
+
+env:
+  CUDA_ARCHS: "60;61;70;75;80;86;89;90"
+  AMDGPU_TARGETS: "gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+  OSS_BUCKET: "miaosoft-internal"
+  OSS_ENDPOINT: "oss-cn-shanghai.aliyuncs.com"
+  OSS_PREFIX: "cunba.ai/transcribe.cpp"
+
+concurrency:
+  group: capi-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════
+  # Linux: CUDA+CPU, ROCm+CPU, SYCL+CPU
+  # ════════════════════════════════════════════════════════════════════════
+  linux:
+    name: Linux ${{ matrix.config.name }}
+    runs-on: ubuntu-22.04
+    container:
+      image: ${{ matrix.config.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: CUDA-CPU
+            container: nvidia/cuda:12.4.1-devel-ubuntu22.04
+            cmake_extra: '-DTRANSCRIBE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="60;61;70;75;80;86;89;90"'
+            artifact_suffix: linux-cuda-cpu
+          - name: ROCm-CPU
+            container: rocm/dev-ubuntu-22.04:6.4-complete
+            cmake_extra: '-DGGML_HIP=ON -DGPU_TARGETS="gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201" -DCMAKE_PREFIX_PATH=/opt/rocm'
+            artifact_suffix: linux-rocm-cpu
+          - name: SYCL-CPU
+            container: intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04
+            cmake_extra: '-DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL'
+            artifact_suffix: linux-sycl-cpu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install build deps
+        run: |
+          apt-get update
+          # Retry downloads: archive.ubuntu.com is intermittently unreachable
+          # from inside GitHub Actions containers (transient connection drops).
+          apt-get -o Acquire::Retries=5 install -y cmake git build-essential
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: capi-linux-${{ matrix.config.artifact_suffix }}
+          update-package-index: true
+
+      - name: Configure
+        run: |
+          # Source oneAPI env if present AND not already loaded (the SYCL
+          # container auto-sources setvars, so re-sourcing errors out).
+          if [ -f /opt/intel/oneapi/setvars.sh ] && [ -z "$ONEAPI_ROOT" ]; then
+            . /opt/intel/oneapi/setvars.sh
+          fi
+          mkdir -p build
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_SHARED_LIBS=ON \
+            -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DTRANSCRIBE_INSTALL=ON \
+            -DCMAKE_INSTALL_PREFIX=build/install \
+            -DTRANSCRIBE_BUILD_TESTS=OFF \
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF \
+            -DTRANSCRIBE_BUILD_TOOLS=OFF \
+            ${{ matrix.config.cmake_extra }}
+
+      - name: Build & install transcribe
+        run: |
+          if [ -f /opt/intel/oneapi/setvars.sh ] && [ -z "$ONEAPI_ROOT" ]; then
+            . /opt/intel/oneapi/setvars.sh
+          fi
+          cmake --build build --parallel $(nproc) --target transcribe
+          cmake --install build
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          # Ship the entire install tree: lib/*.so + lib/transcribe-link.json
+          # (the link manifest the Rust sys crate reads in prebuilt mode) +
+          # include/ + (Windows) bin/*.dll. Downstream consumers point
+          # TRANSCRIBE_PREBUILT_PREFIX at this unzipped tree.
+          cp -r build/install/* artifacts/
+          strip artifacts/lib/libtranscribe.so 2>/dev/null || true
+          # Hard assert: the manifest is load-bearing for prebuilt consumers.
+          test -f artifacts/lib/transcribe-link.json || { \
+            echo "##[error]transcribe-link.json missing from install tree — prebuilt mode will fail"; \
+            exit 1; \
+          }
+          ls -la artifacts/lib/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: transcribe-${{ matrix.config.artifact_suffix }}
+          path: artifacts/
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Windows: CUDA+CPU (primary), ROCm+CPU (best-effort), SYCL+CPU (best-effort)
+  # ════════════════════════════════════════════════════════════════════════
+  windows:
+    name: Windows ${{ matrix.config.name }}
+    runs-on: windows-2022
+    continue-on-error: ${{ matrix.config.best_effort }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: CUDA-CPU
+            setup: cuda
+            artifact_suffix: windows-cuda-cpu
+            best_effort: false
+          - name: ROCm-CPU
+            setup: rocm
+            artifact_suffix: windows-rocm-cpu
+            best_effort: true
+          - name: SYCL-CPU
+            setup: sycl
+            artifact_suffix: windows-sycl-cpu
+            best_effort: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: capi-windows-${{ matrix.config.artifact_suffix }}
+          update-package-index: true
+
+      - name: Setup CUDA Toolkit
+        if: matrix.config.setup == 'cuda'
+        uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.6.2'
+          method: 'network'
+
+      # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
+      # Hosted runners have no AMD GPU, so this only proves configure/compile.
+      # Best-effort (continue-on-error) — Linux ROCm is the reliable signal.
+      - name: Cache ROCm Installation
+        if: matrix.config.setup == 'rocm'
+        id: cache-rocm
+        uses: actions/cache@v5
+        with:
+          path: C:\Program Files\AMD\ROCm
+          key: cache-gha-rocm-26.Q1-${{ runner.os }}
+
+      - name: Install ROCm HIP SDK
+        if: matrix.config.setup == 'rocm' && steps.cache-rocm.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-26.Q1-Win11-For-HIP.exe"
+          Write-Host "Downloading AMD HIP SDK Installer..."
+          Invoke-WebRequest -Uri $url -OutFile "${env:RUNNER_TEMP}\rocm-install.exe" -UseBasicParsing
+          Write-Host "Installing AMD HIP SDK..."
+          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
+          $completed = $proc.WaitForExit(600000)
+          if (-not $completed) {
+            Write-Host "##[error]ROCm installation timed out after 10 minutes. Killing the process."
+            $proc.Kill()
+            exit 1
+          }
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "##[error]ROCm installation failed with exit code $($proc.ExitCode)."
+            exit 1
+          }
+
+      - name: Verify ROCm HIP SDK
+        if: matrix.config.setup == 'rocm'
+        shell: pwsh
+        run: |
+          $hipClang = Get-ChildItem -Path "C:\Program Files\AMD\ROCm" -Recurse -Filter "clang.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $hipClang) {
+            Write-Host "##[error]AMD HIP SDK not found (no clang.exe under C:\Program Files\AMD\ROCm). Cannot proceed with ROCm build."
+            exit 1
+          }
+          Write-Host "Found HIP clang at: $($hipClang.FullName)"
+
+      # ── SYCL/DPC++: offline oneAPI installer + Level Zero (llama.cpp pattern) ──
+      # Pinned to a known-good oneAPI Essentials offline installer. This URL
+      # will eventually rot on Intel's release schedule — swap the constant
+      # below if it 403/Access-Denies. Best-effort (continue-on-error).
+      - name: Download & Install oneAPI
+        if: matrix.config.setup == 'sycl'
+        env:
+          WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
+          WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+        shell: cmd
+        run: scripts\install-oneapi.bat "%WINDOWS_BASEKIT_URL%" "%WINDOWS_DPCPP_MKL%"
+
+      - name: Install Level Zero SDK
+        if: matrix.config.setup == 'sycl'
+        env:
+          LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:LEVEL_ZERO_SDK_URL -OutFile "level-zero-win-sdk.zip" -UseBasicParsing
+          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
+          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify oneAPI
+        if: matrix.config.setup == 'sycl'
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\Program Files (x86)\Intel\oneAPI\setvars.bat") {
+            Write-Host "oneAPI installed successfully"
+          } else {
+            Write-Host "##[error]oneAPI setvars.bat not found after install; DPC++ compiler unavailable. Cannot proceed with SYCL build."
+            exit 1
+          }
+
+      - name: Configure (CUDA)
+        if: matrix.config.setup == 'cuda'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DTRANSCRIBE_BUILD_SHARED=ON ^
+            -DTRANSCRIBE_INSTALL=ON ^
+            -DCMAKE_INSTALL_PREFIX=build/install ^
+            -DTRANSCRIBE_BUILD_TESTS=OFF ^
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF ^
+            -DTRANSCRIBE_BUILD_TOOLS=OFF ^
+            -DTRANSCRIBE_CUDA=ON ^
+            -DCMAKE_CUDA_ARCHITECTURES="${{ env.CUDA_ARCHS }}"
+
+      - name: Configure (ROCm)
+        if: matrix.config.setup == 'rocm'
+        shell: pwsh
+        run: |
+          $hipPath = (Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Split-Path | Split-Path)
+          Write-Host "HIP_PATH: $hipPath"
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="$hipPath\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="$hipPath\bin\clang++.exe" `
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=ON `
+            -DTRANSCRIBE_BUILD_SHARED=ON `
+            -DTRANSCRIBE_INSTALL=ON `
+            -DCMAKE_INSTALL_PREFIX=build/install `
+            -DTRANSCRIBE_BUILD_TESTS=OFF `
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF `
+            -DTRANSCRIBE_BUILD_TOOLS=OFF `
+            -DGGML_HIP=ON `
+            -DGPU_TARGETS="${{ env.AMDGPU_TARGETS }}" `
+            -DCMAKE_PREFIX_PATH="$hipPath"
+
+      - name: Configure (SYCL)
+        if: matrix.config.setup == 'sycl'
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+          cmake -S . -B build -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
+            -DCMAKE_C_COMPILER=cl ^
+            -DCMAKE_CXX_COMPILER=icx ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DTRANSCRIBE_BUILD_SHARED=ON ^
+            -DTRANSCRIBE_INSTALL=ON ^
+            -DCMAKE_INSTALL_PREFIX=build/install ^
+            -DTRANSCRIBE_BUILD_TESTS=OFF ^
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF ^
+            -DTRANSCRIBE_BUILD_TOOLS=OFF ^
+            -DGGML_SYCL=ON ^
+            -DGGML_SYCL_F16=OFF ^
+            -DGGML_SYCL_TARGET=INTEL
+
+      - name: Build & install transcribe (CUDA)
+        if: matrix.config.setup == 'cuda'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build build --parallel %NUMBER_OF_PROCESSORS% --target transcribe
+          cmake --install build
+
+      # ROCm builds with clang (HIP), not MSVC. Add HIP bin to PATH so the
+      # clang/clang++ recorded by Configure remains invokable.
+      - name: Build & install transcribe (ROCm)
+        if: matrix.config.setup == 'rocm'
+        shell: pwsh
+        run: |
+          $hipPath = (Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Split-Path | Split-Path)
+          $env:Path = "$hipPath\bin;$env:Path"
+          cmake --build build --parallel $env:NUMBER_OF_PROCESSORS --target transcribe
+          cmake --install build
+
+      # SYCL needs oneAPI's setvars.bat (for icx) AND vcvars64.bat (for cl,
+      # the C frontend icx targets on Windows).
+      - name: Build & install transcribe (SYCL)
+        if: matrix.config.setup == 'sycl'
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build build --parallel %NUMBER_OF_PROCESSORS% --target transcribe
+          cmake --install build
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts
+          # Ship the entire install tree (lib + include + bin + manifest).
+          Copy-Item -Path build\install\* -Destination artifacts\ -Recurse -Force
+          # Hard assert: the manifest is load-bearing for prebuilt consumers.
+          $manifest = "artifacts\lib\transcribe-link.json"
+          if (-not (Test-Path $manifest)) {
+            Write-Host "##[error]transcribe-link.json missing from install tree — prebuilt mode will fail"
+            exit 1
+          }
+          Get-ChildItem -Path artifacts -Recurse | Select-Object FullName
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: transcribe-${{ matrix.config.artifact_suffix }}
+          path: artifacts/
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Publish to Alibaba Cloud OSS (always runs; best-effort Windows jobs
+  # that fail are skipped since their artifacts won't exist)
+  # ════════════════════════════════════════════════════════════════════════
+  publish-oss:
+    name: Publish to OSS
+    runs-on: ubuntu-22.04
+    needs: [linux, windows]
+    if: always()
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute version strings
+        run: |
+          echo "BUILD_DATE=$(date -u +%Y%m%d)" >> $GITHUB_ENV
+          echo "COMMIT_ID=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: ./artifact
+
+      - name: List downloaded artifacts
+        run: ls -R artifact/ || true
+
+      - name: Install ossutil
+        run: |
+          curl -o ossutil64 "https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64"
+          chmod +x ossutil64
+          ./ossutil64 version || true
+
+      - name: Upload to OSS
+        env:
+          OSS_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_KEY: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -e
+          # Each artifact downloads as a subdirectory (transcribe-windows-cuda-cpu/,
+          # transcribe-linux-sycl-cpu/, etc). Zip each into a single .zip for OSS.
+          # The zip preserves the install-tree layout so a consumer can unzip and
+          # point TRANSCRIBE_PREBUILT_PREFIX at the result.
+          mkdir -p zips
+          for d in artifact/*/; do
+            name=$(basename "$d")
+            (cd "$d" && zip -r "../../zips/${name}.zip" .)
+            echo "zipped ${name}.zip"
+          done
+          if [ ! -d zips ] || [ -z "$(ls -A zips 2>/dev/null)" ]; then
+            echo "No artifacts to upload"; exit 0
+          fi
+          for f in zips/*.zip; do
+            [ -f "$f" ] || continue
+            echo "== $f =="
+            # Dated snapshot (retention/history)
+            ./ossutil64 cp "$f" "oss://${{ env.OSS_BUCKET }}/${{ env.OSS_PREFIX }}/${{ env.BUILD_DATE }}-${{ env.COMMIT_ID }}/$(basename $f)" \
+              -i "$OSS_ID" -k "$OSS_KEY" -e "${{ env.OSS_ENDPOINT }}" -f
+            # Latest pointer (always overwritten)
+            ./ossutil64 cp "$f" "oss://${{ env.OSS_BUCKET }}/${{ env.OSS_PREFIX }}/latest/$(basename $f)" \
+              -i "$OSS_ID" -k "$OSS_KEY" -e "${{ env.OSS_ENDPOINT }}" -f
+          done

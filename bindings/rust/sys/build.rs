@@ -1,13 +1,22 @@
 //! Build script for `transcribe-cpp-sys`.
 //!
-//! Source build is the primary (and currently only) path: the `cmake` crate
-//! drives the vendored C++ tree with `TRANSCRIBE_INSTALL=ON`, and the link
-//! line is reconstructed from NOTHING but the installed
-//! `lib/transcribe-link.json` manifest — the same artifact the `link_smoke`
-//! CI lane compiles a toy C consumer against. No per-platform link lists are
-//! hardcoded here (the whisper-rs drift class this avoids).
+//! Two link paths share the same `emit_link_lines()` output contract:
 //!
-//! Cargo features map directly to CMake options:
+//! 1. **Prebuilt** (set `TRANSCRIBE_PREBUILT_PREFIX=<install-prefix>`): reads
+//!    the `transcribe-link.json` from a CMake install tree and emits link
+//!    directives, skipping the CMake source build entirely. No CUDA/HIP/OneAPI
+//!    toolkit is needed by the consumer; the backend code is already compiled
+//!    into the prebuilt library. This is how CI-built shared libraries are
+//!    consumed (see .github/workflows/capi-build.yml).
+//!
+//! 2. **Source build** (default): the `cmake` crate drives the vendored C++
+//!    tree with `TRANSCRIBE_INSTALL=ON`, and the link line is reconstructed
+//!    from NOTHING but the installed `lib/transcribe-link.json` manifest — the
+//!    same artifact the `link_smoke` CI lane compiles a toy C consumer
+//!    against. No per-platform link lists are hardcoded here (the whisper-rs
+//!    drift class this avoids).
+//!
+//! Cargo features map directly to CMake options (source-build path only):
 //!   `shared`           -> TRANSCRIBE_BUILD_SHARED=ON (default: static)
 //!   `dynamic-backends` -> the above + TRANSCRIBE_GGML_BACKEND_DL=ON (+ x86:
 //!                         GGML_CPU_ALL_VARIANTS=ON, TRANSCRIBE_X86_CONSERVATIVE=ON)
@@ -66,6 +75,36 @@ fn split_cmake_args(s: &str) -> Vec<String> {
 }
 
 fn main() {
+    // ── PREBUILT 短路:用 CI/本地预编译的 install tree,跳过 cmake 源码编译 ──
+    //
+    // 设 `TRANSCRIBE_PREBUILT_PREFIX=<install-prefix>` 后,build.rs 直接读该
+    // prefix 下的 `transcribe-link.json` 发射 link 指令,不再调用 cmake。这让
+    // 消费者(sound-server 等)的 `cargo build` 完全不依赖 CUDA/HIP/OneAPI
+    // toolkit —— 后端代码已在 CI 上编进预编译库,manifest 的 system_libs 字段
+    // 声明了运行时依赖(cudart 等),由 loader/dll-search 解析。
+    //
+    // 与源码编译路径共用同一个 emit_link_lines(),wrapper crate 和下游消费者
+    // 看到的 DEP_TRANSCRIBE_* 环境变量完全一致,对它们零感知。
+    if let Some(prefix) = env::var_os("TRANSCRIBE_PREBUILT_PREFIX") {
+        let prefix = PathBuf::from(&prefix);
+        println!("cargo:rerun-if-env-changed=TRANSCRIBE_PREBUILT_PREFIX");
+        let manifest = find_manifest(&prefix).unwrap_or_else(|| {
+            panic!(
+                "TRANSCRIBE_PREBUILT_PREFIX is set to '{}' but no \
+                 transcribe-link.json found under {}/lib or {}/lib64. \
+                 Point it at a CMake install tree produced with \
+                 -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_INSTALL=ON.",
+                prefix.display(),
+                prefix.display(),
+                prefix.display()
+            )
+        });
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        emit_link_lines(&prefix, &manifest);
+        return; // 跳过下方所有 cmake 源码编译逻辑
+    }
+
+    // ── 源码编译路径(CARGO_MANIFEST_DIR = repo root)──
     // CARGO_MANIFEST_DIR for this crate is the repo root (the sys crate's
     // manifest lives there so the tarball can carry the whole C++ tree).
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());

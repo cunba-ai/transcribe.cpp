@@ -10,11 +10,24 @@ speech-to-text library built on ggml.
 
 ## What it does
 
-`build.rs` compiles the vendored C++ tree from source via CMake (the crate
-tarball carries the whole tree) and reconstructs the link line from the
-installed `transcribe-link.json` manifest — no hardcoded per-platform link
-lists. The committed bindgen output means **libclang is not needed** to build
-this crate.
+`build.rs` has two link paths, both feeding the same `emit_link_lines()` so
+downstream consumers (the `transcribe-cpp` wrapper, and crates depending on
+it) see identical `DEP_TRANSCRIBE_*` metadata either way:
+
+1. **Source build (default).** Compiles the vendored C++ tree via CMake (the
+   crate tarball carries the whole tree) and reconstructs the link line from
+   the installed `transcribe-link.json` manifest — no hardcoded per-platform
+   link lists. Requires a C++ toolchain + CMake (and, for GPU backends, the
+   matching CUDA/HIP/OneAPI toolkit).
+2. **Prebuilt (set `TRANSCRIBE_PREBUILT_PREFIX`).** Reads
+   `transcribe-link.json` straight from a prebuilt CMake install tree and
+   emits the link directives, skipping the CMake build entirely. **No GPU
+   toolkit is needed** — the backend code is already compiled into the
+   prebuilt library. This is how CI-built shared libraries are consumed. See
+   [Using a prebuilt library](#using-a-prebuilt-library) below.
+
+The committed bindgen output means **libclang is not needed** to build this
+crate in either path.
 
 ## Build prerequisites
 
@@ -71,6 +84,37 @@ feature-derived defines (so a user `-D` wins), and unsupported/untested by
 design: they exist so a Cargo feature is never a hard ceiling on what you can
 configure. The link line is still reconstructed from the generated manifest, so
 whatever you turn on links correctly.
+
+## Using a prebuilt library
+
+If you have a prebuilt install tree (e.g. downloaded from CI, or produced by a
+local `cmake --install`), you can skip the CMake source build entirely — no
+C++ toolchain or GPU toolkit needed at the consumer's `cargo build`. Point
+`TRANSCRIBE_PREBUILT_PREFIX` at the install prefix:
+
+```bash
+TRANSCRIBE_PREBUILT_PREFIX=/path/to/install-prefix cargo build
+```
+
+The prefix must be a CMake install tree produced with
+`-DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_INSTALL=ON` — i.e. it contains
+`lib/transcribe-link.json`, the shared library (`lib/libtranscribe.so` /
+`libtranscribe.dylib` / `bin/transcribe.dll`), and the headers under `include/`.
+The build script reads the manifest and emits exactly the same link directives
+the source-build path would, so the safe wrapper and any downstream crate see
+no difference.
+
+CI builds one install tree per GPU backend × platform (CUDA/ROCm/SYCL ×
+Linux/Windows) and ships them as zip artifacts; see
+[`.github/workflows/capi-build.yml`](../../.github/workflows/capi-build.yml).
+Download the one matching your target, unzip it, and set
+`TRANSCRIBE_PREBUILT_PREFIX` to the unzipped prefix.
+
+**Runtime note.** A shared library still needs to be found at run time. On
+Linux/macOS the build script emits an rpath to the install tree's `lib` dir;
+on Windows (no rpath) the build script stages `bin/*.dll` next to Cargo's
+build artifacts, but for a deployed binary you must place `transcribe.dll`
+(and any ggml DLLs) next to the executable yourself.
 
 ## ABI drift
 
