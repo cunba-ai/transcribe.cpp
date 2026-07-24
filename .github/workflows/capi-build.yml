@@ -84,7 +84,9 @@ jobs:
           apt-get update
           # Retry downloads: archive.ubuntu.com is intermittently unreachable
           # from inside GitHub Actions containers (transient connection drops).
-          apt-get -o Acquire::Retries=5 install -y cmake git build-essential
+          # patchelf: used in Collect artifacts to flatten the versioned
+          # libtranscribe.so symlink chain into a single file (see there).
+          apt-get -o Acquire::Retries=5 install -y cmake git build-essential patchelf
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -142,7 +144,24 @@ jobs:
           # debug data, so this only removes ggml's symbol tables (~90MB) —
           # but that's still real savings, and harmless on the non-CUDA
           # backends where the .so is tiny.
-          strip artifacts/lib/*.so 2>/dev/null || true
+          strip artifacts/lib/*.so* 2>/dev/null || true
+          # Flatten the versioned libtranscribe.so symlink chain
+          # (libtranscribe.so -> .so.0.2 -> .so.0.2.0) into a SINGLE file.
+          # CMake's VERSION/SOVERSION install rules produce that 3-link chain;
+          # GitHub's upload-artifact dereferences symlinks into full file
+          # copies, so the chain ships as THREE copies of the ~350MB-1.2GB
+          # .so (the single biggest reason Linux artifacts were ~3x the
+          # Windows size). Mirrors libaudiocpp.so: one file, no version suffix,
+          # SONAME rewritten to match. A prebuilt consumer links
+          # `-ltranscribe` and finds libtranscribe.so; the SONAME agrees with
+          # the filename so the runtime linker is consistent.
+          _real=$(readlink -f artifacts/lib/libtranscribe.so)
+          _realbase=$(basename "$_real")
+          patchelf --set-soname libtranscribe.so "$_real"
+          # Remove the symlink chain (libtranscribe.so + .so.0.2) and any
+          # other versioned names, keeping only the real file.
+          find artifacts/lib -maxdepth 1 \( -name 'libtranscribe.so' -o -name 'libtranscribe.so.*' \) ! -name "$_realbase" -delete
+          mv "$_real" artifacts/lib/libtranscribe.so
           # Hard assert: the manifest is load-bearing for prebuilt consumers.
           test -f artifacts/lib/transcribe-link.json || { \
             echo "##[error]transcribe-link.json missing from install tree — prebuilt mode will fail"; \
