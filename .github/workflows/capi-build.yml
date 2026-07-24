@@ -72,7 +72,7 @@ jobs:
             artifact_suffix: linux-rocm-cpu
           - name: SYCL-CPU
             container: intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04
-            cmake_extra: '-DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DTRANSCRIBE_BUILD_SHARED=ON'
+            cmake_extra: '-DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL'
             artifact_suffix: linux-sycl-cpu
 
     steps:
