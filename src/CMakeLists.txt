@@ -198,13 +198,25 @@ target_link_libraries(transcribe
 
 # TRANSCRIBE_SHARED_EMBED: ggml is STATIC, so its .o (incl. SYCL/CUDA backends)
 # link into libtranscribe.so/.dll. Backend targets set their toolchain flags
-# (e.g. ggml-sycl uses -fsycl as PRIVATE link options on itself); when they
-# were separate .so files those flags applied at their own link step, but now
-# that they merge into libtranscribe the final link needs them too.
-if(TRANSCRIBE_SHARED_EMBED AND GGML_SYCL)
+# and runtime libs as PRIVATE on themselves; when they were separate .so files
+# those applied at their own link step, but now that they merge into
+# libtranscribe the final link needs them too.
+if(TRANSCRIBE_SHARED_EMBED)
     # ggml-sycl links -fsycl for the SYCL runtime (sycl::*); without it the
     # merged libtranscribe.so has unresolved SYCL symbols.
-    target_link_options(transcribe PRIVATE "-fsycl")
+    if(GGML_SYCL)
+        target_link_options(transcribe PRIVATE "-fsycl")
+    endif()
+    # ggml-cuda links CUDA::cudart + CUDA::cublas PRIVATELY; embed mode needs
+    # them at the libtranscribe link step or CUDA runtime symbols are unresolved.
+    if(GGML_CUDA)
+        # Use the shared CUDA runtime (cudart.so / cudart.lib) so the single
+        # .so/.dll resolves CUDA symbols at load time.
+        find_package(CUDAToolkit QUIET)
+        if(CUDAToolkit_FOUND)
+            target_link_libraries(transcribe PRIVATE CUDA::cudart CUDA::cublas)
+        endif()
+    endif()
 endif()
 
 # BLAS for the host decoder (cblas_sgemv in decoder.cpp). On Apple we
