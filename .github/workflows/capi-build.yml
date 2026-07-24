@@ -39,7 +39,7 @@ permissions:
   actions: write   # needed to save toolchain caches
 
 env:
-  CUDA_ARCHS: "60;61;70;75;80;86;89;90"
+  CUDA_ARCHS: "61;70;75;80;86;89;120"
   AMDGPU_TARGETS: "gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
   OSS_BUCKET: "miaosoft-internal"
   OSS_ENDPOINT: "oss-cn-shanghai.aliyuncs.com"
@@ -63,8 +63,8 @@ jobs:
       matrix:
         config:
           - name: CUDA-CPU
-            container: nvidia/cuda:12.4.1-devel-ubuntu22.04
-            cmake_extra: '-DTRANSCRIBE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="60;61;70;75;80;86;89;90"'
+            container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+            cmake_extra: '-DTRANSCRIBE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;120"'
             artifact_suffix: linux-cuda-cpu
           - name: ROCm-CPU
             container: rocm/dev-ubuntu-22.04:6.4-complete
@@ -124,14 +124,24 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          # Ship the entire install tree: lib/*.so + lib/transcribe-link.json
-          # (the link manifest the Rust sys crate reads in prebuilt mode) +
-          # include/ + (Windows) bin/*.dll. Downstream consumers point
-          # TRANSCRIBE_PREBUILT_PREFIX at this unzipped tree.
+          # Ship the entire install tree, then prune what prebuilt consumers
+          # never need. Downstream points TRANSCRIBE_PREBUILT_PREFIX at this
+          # unzipped tree and reads lib/transcribe-link.json (the manifest lists
+          # ONLY `transcribe` in `libraries` — ggml is embedded into
+          # libtranscribe.so at link time in SHARED_EMBED mode, so the ggml
+          # static archives ggml's install rules drop in lib/ are dead weight).
           cp -r build/install/* artifacts/
-          # Strip ALL shared libraries (libtranscribe.so + libggml-*.so). The
-          # CUDA backend .so carries ~800MB of debug symbols in a Release build;
-          # stripping all .so shrinks the CUDA artifact from ~1.4GB to ~400MB.
+          # Drop the redundant ggml static archives (~1.3GB for the CUDA
+          # backend alone) and ggml's cmake package config (a prebuilt
+          # consumer links via the manifest, never via find_package(ggml)).
+          # libtranscribe.so* (the embedded artifact) is kept untouched.
+          rm -f artifacts/lib/libggml*.a
+          rm -rf artifacts/lib/cmake
+          # Strip the embedded shared lib. In SHARED_EMBED mode the fatbin
+          # (CUDA kernels for every arch, ~1.2GB) is the bulk and is NOT
+          # debug data, so this only removes ggml's symbol tables (~90MB) —
+          # but that's still real savings, and harmless on the non-CUDA
+          # backends where the .so is tiny.
           strip artifacts/lib/*.so 2>/dev/null || true
           # Hard assert: the manifest is load-bearing for prebuilt consumers.
           test -f artifacts/lib/transcribe-link.json || { \
@@ -184,7 +194,7 @@ jobs:
         if: matrix.config.setup == 'cuda'
         uses: Jimver/cuda-toolkit@v0.2.21
         with:
-          cuda: '12.6.2'
+          cuda: '12.8.1'
           method: 'network'
 
       # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
@@ -361,8 +371,20 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts
-          # Ship the entire install tree (lib + include + bin + manifest).
+          # Ship the entire install tree, then prune what prebuilt consumers
+          # never need. The manifest (lib/transcribe-link.json) lists ONLY
+          # `transcribe` in `libraries`: in SHARED_EMBED mode ggml is embedded
+          # into transcribe.dll at link time, so the ggml static archives
+          # ggml's install rules drop in lib/ are dead weight — the CUDA one
+          # alone is ~1.34GB. Keep transcribe.dll (the embedded artifact in
+          # bin/), transcribe.lib (its import library), the headers, and the
+          # manifest.
           Copy-Item -Path build\install\* -Destination artifacts\ -Recurse -Force
+          # Drop redundant ggml static archives + ggml's cmake package config.
+          # transcribe.lib is the .dll's import library (linker needs it) and
+          # does NOT match the ggml*.lib glob, so it is kept.
+          Get-ChildItem -Path artifacts\lib -Filter "ggml*.lib" -ErrorAction SilentlyContinue | Remove-Item -Force
+          Remove-Item -Path artifacts\lib\cmake -Recurse -Force -ErrorAction SilentlyContinue
           # Hard assert: the manifest is load-bearing for prebuilt consumers.
           $manifest = "artifacts\lib\transcribe-link.json"
           if (-not (Test-Path $manifest)) {
@@ -425,8 +447,19 @@ jobs:
           mkdir -p zips
           for d in artifact/*/; do
             name=$(basename "$d")
-            (cd "$d" && zip -r "../../zips/${name}.zip" .)
-            echo "zipped ${name}.zip"
+            # Verify the artifact has the manifest before zipping (embed mode:
+            # lib/transcribe-link.json). Skip incomplete artifacts from
+            # cancelled/failed jobs rather than shipping a broken zip.
+            if [ ! -f "${d}lib/transcribe-link.json" ]; then
+              echo "SKIP ${name}: no lib/transcribe-link.json (incomplete artifact)"
+              continue
+            fi
+            # -y preserves symlinks instead of dereferencing them. Without it
+            # the Linux libtranscribe.so -> .so.0.2 -> .so.0.2.0 chain gets
+            # stored as THREE copies of the ~1.2GB .so (the single biggest
+            # reason the Linux artifact was 1.8GB vs Windows' 927MB).
+            (cd "$d" && zip -ry "../../zips/${name}.zip" .)
+            echo "zipped ${name}.zip ($(du -sh ../../zips/${name}.zip | cut -f1))"
           done
           if [ ! -d zips ] || [ -z "$(ls -A zips 2>/dev/null)" ]; then
             echo "No artifacts to upload"; exit 0
