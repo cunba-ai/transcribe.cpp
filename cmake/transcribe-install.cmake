@@ -61,13 +61,17 @@ if(TRANSCRIBE_BUILD_SHARED)
         endif()
     endforeach()
 endif()
-# In shared builds we install only the LIBRARY (.so/.dylib/.dll) and RUNTIME
-# (Windows .dll) artifacts. The ARCHIVE (.a static archive on Linux, ~1GB for
-# CUDA) is intentionally NOT installed: prebuilt consumers link the shared
-# library at runtime and never need the static archive, and shipping it bloats
-# the OSS artifact 3-10x. In static builds the .a IS the primary artifact, so
-# ARCHIVE is installed there.
-if(TRANSCRIBE_BUILD_SHARED)
+# In shared/embed builds we install only the LIBRARY (.so/.dylib/.dll) and
+# RUNTIME (Windows .dll) artifacts. The ARCHIVE (.a static archive on Linux,
+# ~1GB for CUDA) is intentionally NOT installed: prebuilt consumers link the
+# shared library at runtime and never need the static archive, and shipping it
+# bloats the OSS artifact 3-10x. In static builds the .a IS the primary
+# artifact, so ARCHIVE is installed there.
+#
+# TRANSCRIBE_SHARED_EMBED builds libtranscribe as SHARED (with ggml embedded
+# statically inside it), so its install artifact is the .so/.dll — same as a
+# plain shared build.
+if(TRANSCRIBE_BUILD_SHARED OR TRANSCRIBE_SHARED_EMBED)
     install(TARGETS transcribe
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -103,7 +107,7 @@ set(_system_libs "")
 set(_frameworks "")
 set(_link_flags "")
 
-if(NOT TRANSCRIBE_BUILD_SHARED)
+if(NOT TRANSCRIBE_BUILD_SHARED AND NOT TRANSCRIBE_SHARED_EMBED)
     # Static: the consumer links the whole archive set. Order is
     # single-pass-ld safe: each archive's undefined refs resolve in a later
     # one (transcribe -> ggml -> backends -> ggml-base).
@@ -163,7 +167,7 @@ set(_metal_embed false)
 if("metal" IN_LIST _kinds AND GGML_METAL_EMBED_LIBRARY)
     set(_metal_embed true)
 endif()
-if(TRANSCRIBE_BUILD_SHARED)
+if(TRANSCRIBE_BUILD_SHARED OR TRANSCRIBE_SHARED_EMBED)
     set(_shared_json true)
 else()
     set(_shared_json false)

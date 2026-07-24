@@ -10,7 +10,14 @@
 # them at runtime via the ggml device registry; no per-backend compile
 # defs are needed on libtranscribe itself.
 
-add_library(transcribe
+# TRANSCRIBE_SHARED_EMBED: build libtranscribe as SHARED while ggml stays
+# STATIC, so ggml's .o (incl. CUDA/Vulkan backends) are embedded into the
+# single libtranscribe.so/.dll at link time. Otherwise follow BUILD_SHARED_LIBS.
+if(TRANSCRIBE_SHARED_EMBED)
+    add_library(transcribe SHARED
+else()
+    add_library(transcribe
+endif()
     transcribe.cpp
     transcribe-loader.cpp
     transcribe-arch.cpp

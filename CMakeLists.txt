@@ -146,6 +146,15 @@ option(TRANSCRIBE_BUILD_SHARED    "Build libtranscribe + ggml as shared librarie
 option(TRANSCRIBE_USE_OPENMP      "Use OpenMP for ggml's CPU threadpool"             OFF)
 option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  ON)
 
+# Single-artifact shared library: libtranscribe.so/.dll embeds ggml + all
+# backends statically (like libaudiocpp.so does). ggml is built STATIC (so
+# its .o land inside libtranscribe at link time), but libtranscribe itself
+# is SHARED. This produces ONE self-contained shared lib with no libggml*.so
+# to chase at runtime — ideal for prebuilt consumers. Implies the same
+# install/link-manifest posture as TRANSCRIBE_BUILD_SHARED, but the manifest's
+# `libraries` lists only `transcribe` (the single shared lib).
+option(TRANSCRIBE_SHARED_EMBED "Build libtranscribe as a shared lib with ggml embedded (single .so)" OFF)
+
 # Dynamic ggml backends: each backend (CPU, Vulkan, CUDA, ...) becomes a
 # separate loadable module living NEXT TO libtranscribe instead of being
 # compiled in. This is the provider-directory artifact shape the Python
@@ -346,7 +355,15 @@ set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 # libtranscribe follow this single switch. Symbol visibility is already hidden
 # by default (set above), so a shared lib exports only the TRANSCRIBE_API
 # surface.
-set(BUILD_SHARED_LIBS ${TRANSCRIBE_BUILD_SHARED} CACHE BOOL "" FORCE)
+#
+# TRANSCRIBE_SHARED_EMBED overrides this: ggml stays STATIC (so its .o are
+# embedded into libtranscribe at link time), but libtranscribe itself is
+# SHARED. The result is a single self-contained .so/.dll (like libaudiocpp.so).
+if(TRANSCRIBE_SHARED_EMBED)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+else()
+    set(BUILD_SHARED_LIBS ${TRANSCRIBE_BUILD_SHARED} CACHE BOOL "" FORCE)
+endif()
 
 # Dynamic backend modules (see the option's comment above). ggml requires
 # shared libs for GGML_BACKEND_DL, so gate it on TRANSCRIBE_BUILD_SHARED

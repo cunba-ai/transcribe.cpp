@@ -105,7 +105,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DBUILD_SHARED_LIBS=ON \
-            -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DTRANSCRIBE_SHARED_EMBED=ON \
             -DTRANSCRIBE_INSTALL=ON \
             -DCMAKE_INSTALL_PREFIX=build/install \
             -DTRANSCRIBE_BUILD_TESTS=OFF \
@@ -273,7 +273,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
             -DBUILD_SHARED_LIBS=ON ^
-            -DTRANSCRIBE_BUILD_SHARED=ON ^
+            -DTRANSCRIBE_SHARED_EMBED=ON ^
             -DTRANSCRIBE_INSTALL=ON ^
             -DCMAKE_INSTALL_PREFIX=build/install ^
             -DTRANSCRIBE_BUILD_TESTS=OFF ^
@@ -295,7 +295,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
             -DCMAKE_BUILD_TYPE=Release `
             -DBUILD_SHARED_LIBS=ON `
-            -DTRANSCRIBE_BUILD_SHARED=ON `
+            -DTRANSCRIBE_SHARED_EMBED=ON `
             -DTRANSCRIBE_INSTALL=ON `
             -DCMAKE_INSTALL_PREFIX=build/install `
             -DTRANSCRIBE_BUILD_TESTS=OFF `
@@ -317,7 +317,7 @@ jobs:
             -DCMAKE_C_COMPILER=cl ^
             -DCMAKE_CXX_COMPILER=icx ^
             -DBUILD_SHARED_LIBS=ON ^
-            -DTRANSCRIBE_BUILD_SHARED=ON ^
+            -DTRANSCRIBE_SHARED_EMBED=ON ^
             -DTRANSCRIBE_INSTALL=ON ^
             -DCMAKE_INSTALL_PREFIX=build/install ^
             -DTRANSCRIBE_BUILD_TESTS=OFF ^
