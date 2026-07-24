@@ -14,10 +14,11 @@
 # STATIC, so ggml's .o (incl. CUDA/Vulkan backends) are embedded into the
 # single libtranscribe.so/.dll at link time. Otherwise follow BUILD_SHARED_LIBS.
 if(TRANSCRIBE_SHARED_EMBED)
-    add_library(transcribe SHARED
+    set(_transcribe_lib_type SHARED)
 else()
-    add_library(transcribe
+    set(_transcribe_lib_type "")
 endif()
+add_library(transcribe ${_transcribe_lib_type}
     transcribe.cpp
     transcribe-loader.cpp
     transcribe-arch.cpp

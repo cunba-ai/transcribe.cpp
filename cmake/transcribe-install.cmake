@@ -225,6 +225,14 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/transcribe-link.json"
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/transcribe-link.json"
     DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
+if(TRANSCRIBE_SHARED_EMBED)
+    set(_install_mode "shared-embed")
+elseif(TRANSCRIBE_BUILD_SHARED)
+    set(_install_mode "shared")
+else()
+    set(_install_mode "static")
+endif()
+
 message(STATUS
-    "transcribe install: ${PROJECT_VERSION} shared=${TRANSCRIBE_BUILD_SHARED} "
+    "transcribe install: ${PROJECT_VERSION} mode=${_install_mode} "
     "backends: ${_kinds} (link manifest: lib/transcribe-link.json)")
