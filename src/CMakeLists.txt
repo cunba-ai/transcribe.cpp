@@ -197,26 +197,25 @@ target_link_libraries(transcribe
 )
 
 # TRANSCRIBE_SHARED_EMBED: ggml is STATIC, so its .o (incl. SYCL/CUDA backends)
-# link into libtranscribe.so/.dll. Backend targets set their toolchain flags
-# and runtime libs as PRIVATE on themselves; when they were separate .so files
-# those applied at their own link step, but now that they merge into
-# libtranscribe the final link needs them too.
+# link into libtranscribe.so/.dll. Backend targets (ggml-sycl, ggml-cuda, ...)
+# set their runtime deps (-fsycl, CUDA::cudart, IntelSYCL::SYCL_CXX, Level Zero,
+# DNNL, MKL) as PRIVATE on themselves. `target_link_libraries(ggml PUBLIC
+# <backend>)` propagates the backend's .o to ggml's consumers, but PRIVATE
+# link deps/options do NOT cross that boundary — so the merged libtranscribe
+# link is missing them.
+#
+# Fix: link the backend targets DIRECTLY to transcribe. This brings each
+# backend's own PRIVATE link line (-fsycl, cudart, ...) onto transcribe's link
+# step, exactly as a static consumer would need (see transcribe-link.json's
+# static `libraries` list: transcribe + ggml + backends + ggml-base).
 if(TRANSCRIBE_SHARED_EMBED)
-    # ggml-sycl links -fsycl for the SYCL runtime (sycl::*); without it the
-    # merged libtranscribe.so has unresolved SYCL symbols.
-    if(GGML_SYCL)
-        target_link_options(transcribe PRIVATE "-fsycl")
-    endif()
-    # ggml-cuda links CUDA::cudart + CUDA::cublas PRIVATELY; embed mode needs
-    # them at the libtranscribe link step or CUDA runtime symbols are unresolved.
-    if(GGML_CUDA)
-        # Use the shared CUDA runtime (cudart.so / cudart.lib) so the single
-        # .so/.dll resolves CUDA symbols at load time.
-        find_package(CUDAToolkit QUIET)
-        if(CUDAToolkit_FOUND)
-            target_link_libraries(transcribe PRIVATE CUDA::cudart CUDA::cublas)
+    # Resolve backend targets the same way transcribe-install.cmake does.
+    transcribe_backend_kinds(_embed_kinds _embed_backend_targets)
+    foreach(_be ${_embed_backend_targets})
+        if(TARGET ${_be})
+            target_link_libraries(transcribe PRIVATE ${_be})
         endif()
-    endif()
+    endforeach()
 endif()
 
 # BLAS for the host decoder (cblas_sgemv in decoder.cpp). On Apple we
