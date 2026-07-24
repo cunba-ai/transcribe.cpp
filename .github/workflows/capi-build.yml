@@ -129,7 +129,10 @@ jobs:
           # include/ + (Windows) bin/*.dll. Downstream consumers point
           # TRANSCRIBE_PREBUILT_PREFIX at this unzipped tree.
           cp -r build/install/* artifacts/
-          strip artifacts/lib/libtranscribe.so 2>/dev/null || true
+          # Strip ALL shared libraries (libtranscribe.so + libggml-*.so). The
+          # CUDA backend .so carries ~800MB of debug symbols in a Release build;
+          # stripping all .so shrinks the CUDA artifact from ~1.4GB to ~400MB.
+          strip artifacts/lib/*.so 2>/dev/null || true
           # Hard assert: the manifest is load-bearing for prebuilt consumers.
           test -f artifacts/lib/transcribe-link.json || { \
             echo "##[error]transcribe-link.json missing from install tree — prebuilt mode will fail"; \
