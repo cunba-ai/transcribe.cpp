@@ -209,7 +209,10 @@ target_link_libraries(transcribe
 # step, exactly as a static consumer would need (see transcribe-link.json's
 # static `libraries` list: transcribe + ggml + backends + ggml-base).
 if(TRANSCRIBE_SHARED_EMBED)
-    # Resolve backend targets the same way transcribe-install.cmake does.
+    # transcribe_backend_kinds is defined in cmake/transcribe-backend-kinds.cmake
+    # (included later by transcribe-install.cmake at the top level). Include it
+    # here so we can resolve backend target names during the src/ configure pass.
+    include("${CMAKE_SOURCE_DIR}/cmake/transcribe-backend-kinds.cmake")
     transcribe_backend_kinds(_embed_kinds _embed_backend_targets)
     foreach(_be ${_embed_backend_targets})
         if(TARGET ${_be})
