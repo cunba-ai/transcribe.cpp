@@ -182,7 +182,10 @@ endif()
 # MSVC consumer that includes transcribe.h links against __imp_* thunks the
 # archive never provides (LNK2019). Bindgen/Python FFIs carry no __declspec and
 # are unaffected. No-op off Windows/MSVC (the header guard is _WIN32-only).
-if(NOT TRANSCRIBE_BUILD_SHARED)
+#
+# TRANSCRIBE_SHARED_EMBED builds a SHARED lib, so it must NOT define
+# TRANSCRIBE_STATIC (the .dll needs dllexport to generate the .lib import lib).
+if(NOT TRANSCRIBE_BUILD_SHARED AND NOT TRANSCRIBE_SHARED_EMBED)
     target_compile_definitions(transcribe PUBLIC TRANSCRIBE_STATIC)
 endif()
 

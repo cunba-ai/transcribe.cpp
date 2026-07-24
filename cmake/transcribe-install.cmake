@@ -61,20 +61,26 @@ if(TRANSCRIBE_BUILD_SHARED)
         endif()
     endforeach()
 endif()
-# In shared/embed builds we install only the LIBRARY (.so/.dylib/.dll) and
-# RUNTIME (Windows .dll) artifacts. The ARCHIVE (.a static archive on Linux,
-# ~1GB for CUDA) is intentionally NOT installed: prebuilt consumers link the
-# shared library at runtime and never need the static archive, and shipping it
-# bloats the OSS artifact 3-10x. In static builds the .a IS the primary
-# artifact, so ARCHIVE is installed there.
+# In shared/embed builds we install LIBRARY (.so/.dylib), RUNTIME (Windows
+# .dll), and ARCHIVE. On Linux ARCHIVE is the .a static archive (~1GB for
+# CUDA) which prebuilt consumers never need, so we skip it. On Windows ARCHIVE
+# is the .lib import library (tiny, ~5KB-5MB) which IS needed for linking, so
+# it must be installed. CMake classifies a Windows .dll's companion .lib as
+# ARCHIVE, not LIBRARY -- hence the platform split.
 #
-# TRANSCRIBE_SHARED_EMBED builds libtranscribe as SHARED (with ggml embedded
-# statically inside it), so its install artifact is the .so/.dll — same as a
-# plain shared build.
+# In static builds the .a IS the primary artifact, so ARCHIVE is always
+# installed there.
 if(TRANSCRIBE_BUILD_SHARED OR TRANSCRIBE_SHARED_EMBED)
-    install(TARGETS transcribe
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(WIN32)
+        install(TARGETS transcribe
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    else()
+        install(TARGETS transcribe
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
 else()
     install(TARGETS transcribe
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
