@@ -61,10 +61,22 @@ if(TRANSCRIBE_BUILD_SHARED)
         endif()
     endforeach()
 endif()
-install(TARGETS transcribe
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# In shared builds we install only the LIBRARY (.so/.dylib/.dll) and RUNTIME
+# (Windows .dll) artifacts. The ARCHIVE (.a static archive on Linux, ~1GB for
+# CUDA) is intentionally NOT installed: prebuilt consumers link the shared
+# library at runtime and never need the static archive, and shipping it bloats
+# the OSS artifact 3-10x. In static builds the .a IS the primary artifact, so
+# ARCHIVE is installed there.
+if(TRANSCRIBE_BUILD_SHARED)
+    install(TARGETS transcribe
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+else()
+    install(TARGETS transcribe
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 # Install the ggml backend MODULE libraries beside libtranscribe on Windows.
 # In CMake's install() model a MODULE library is a LIBRARY artifact on EVERY
