@@ -361,6 +361,12 @@ set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 # SHARED. The result is a single self-contained .so/.dll (like libaudiocpp.so).
 if(TRANSCRIBE_SHARED_EMBED)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # ggml builds as STATIC, but its .o are linked into the SHARED libtranscribe.
+    # On Linux/Unix a shared library requires position-independent code; without
+    # -fPIC the static .o trigger "relocation R_X86_64_32 ... recompile with
+    # -fPIC" at link time. Force PIC globally BEFORE add_subdirectory(ggml) so
+    # every ggml target compiles with -fPIC. (No-op on Windows/MSVC.)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     set(BUILD_SHARED_LIBS ${TRANSCRIBE_BUILD_SHARED} CACHE BOOL "" FORCE)
 endif()
