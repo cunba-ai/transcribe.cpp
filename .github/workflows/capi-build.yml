@@ -63,7 +63,7 @@ jobs:
       matrix:
         config:
           - name: CUDA-CPU
-            container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+            container: nvidia/cuda:12.9.1-devel-ubuntu22.04
             cmake_extra: '-DTRANSCRIBE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;120"'
             artifact_suffix: linux-cuda-cpu
           - name: ROCm-CPU
@@ -192,9 +192,9 @@ jobs:
 
       - name: Setup CUDA Toolkit
         if: matrix.config.setup == 'cuda'
-        uses: Jimver/cuda-toolkit@v0.2.21
+        uses: Jimver/cuda-toolkit@v0.2.35
         with:
-          cuda: '12.8.1'
+          cuda: '12.9.0'
           method: 'network'
 
       # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
