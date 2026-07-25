@@ -60,6 +60,24 @@ rp.vad.device_id = 0;
 transcribe_run(session, pcm, n_samples, &rp);
 ```
 
+#### ⚠️ max_chunk_ms 与生成预算
+
+`max_chunk_ms` 默认取 family 的 `effective_max_audio_ms`,它反映的是**输入侧**
+上下文容量。对 encoder-decoder 家族(Qwen3-ASR 等),这个值只看输入 token 上限,
+**不考虑生成预算** —— 例如 Qwen3-ASR-0.6B 的 `effective_max_audio_ms` 高达
+~87 分钟(65536 输入上下文),但生成预算只有 256 token。
+
+VAD 默认按这个值切分会让单段过长,单段解码的转录文本超出生成预算被截断
+(`TRANSCRIBE_ERR_OUTPUT_TRUNCATED`)。对这类模型,**务必显式设 `max_chunk_ms`**
+到一个生成预算能覆盖的时长(经验上 Qwen3-ASR 用 10s 左右,256 token 约能转录
+10-20s 语音):
+
+```c
+rp.vad.max_chunk_ms = 10000;  // 10s — Qwen3-ASR 等 256-token-budget 模型
+```
+
+纯 encoder 家族(Whisper、Parakeet 等,无固定生成预算)可用默认值。
+
 ### 独立 VAD(不跑 ASR)
 
 只想做语音分段,不需要转录:

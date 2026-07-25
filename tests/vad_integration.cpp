@@ -124,15 +124,24 @@ transcribe_status run_asr(const std::string & model_path,
     rp.language = "en";  // meeting.wav is English
     if (vad_mode != TRANSCRIBE_VAD_OFF) {
         rp.vad.mode    = vad_mode;
-        rp.vad.backend = kAudiocppBackendCuda;  // VAD on GPU
+        // VAD backend: CPU (0) by default to isolate VAD logic from GPU
+        // state. Override via TRANSCRIBE_VAD_TEST_BACKEND for GPU testing.
+        const char * vb_env = std::getenv("TRANSCRIBE_VAD_TEST_BACKEND");
+        rp.vad.backend = (vb_env && vb_env[0]) ? std::atoi(vb_env) : 0;
         // Qwen3-ASR advertises a huge effective_max_audio_ms (~87 min, from
         // its 65536-token INPUT context) but a 256-token GENERATION budget.
         // VAD's default max_chunk (family effective_max_audio_ms) would
         // produce chunks whose transcript blows past 256 tokens -> truncation.
-        // Cap chunks at 10s so each segment's transcript stays well under
-        // the 256-token generation ceiling. This also exercises the
-        // max_chunk_ms override path.
-        rp.vad.max_chunk_ms = 10000;
+        // Cap chunks at 5s so each segment's transcript stays well under the
+        // 256-token generation ceiling even for dense meeting speech.
+        // Qwen3-ASR advertises a huge effective_max_audio_ms (~87 min, from
+        // its 65536-token INPUT context) but a 256-token GENERATION budget.
+        // VAD's default max_chunk (family effective_max_audio_ms) would
+        // produce chunks whose transcript blows past 256 tokens -> truncation.
+        // Cap chunks via TRANSCRIBE_VAD_TEST_MAX_CHUNK_MS (default 5000ms) so
+        // each segment's transcript stays well under the 256-token ceiling.
+        const char * mc_env = std::getenv("TRANSCRIBE_VAD_TEST_MAX_CHUNK_MS");
+        rp.vad.max_chunk_ms = (mc_env && mc_env[0]) ? std::atoll(mc_env) : 5000;
     }
     st = transcribe_run(ctx, pcm, n_samples, &rp);
 
@@ -151,6 +160,16 @@ transcribe_status run_asr(const std::string & model_path,
 }  // namespace
 
 int main() {
+    // Surface library WARN/INFO logs (esp. the VAD chunk-plan diagnostic) so
+    // truncation/segmentation issues are visible without a separate log sink.
+    transcribe_log_set(
+        [](transcribe_log_level level, const char * msg, void * /*ud*/) {
+            if (level >= TRANSCRIBE_LOG_LEVEL_WARN) {
+                std::fprintf(stderr, "[lib] %s", msg);
+            }
+        },
+        nullptr);
+
     // Skip cleanly when any prerequisite is missing.
     std::string dll_path, model_path, wav_path;
     const bool  have_dll   = env_path("TRANSCRIBE_VAD_DLL", dll_path);

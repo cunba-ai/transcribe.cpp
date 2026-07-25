@@ -387,13 +387,15 @@ add_test(NAME transcribe_vad_merge_unit
 if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
     add_executable(transcribe_vad_integration
         vad_integration.cpp)
-    target_link_libraries(transcribe_vad_integration PRIVATE transcribe)
+    # transcribe-common-example provides transcribe_cli::load_wav_mono_16k.
+    target_link_libraries(transcribe_vad_integration
+        PRIVATE transcribe transcribe-common-example)
     target_include_directories(transcribe_vad_integration PRIVATE
         ${CMAKE_SOURCE_DIR}/src)
     transcribe_apply_warnings(transcribe_vad_integration)
     add_test(NAME transcribe_vad_integration
         COMMAND transcribe_vad_integration)
-    # Clean SKIP when the dll or fixture is absent (CI has neither).
+    # Clean SKIP when the dll / model / fixture is absent (CI has none).
     set_tests_properties(transcribe_vad_integration PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
