@@ -1064,6 +1064,87 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *              to probe whether the loaded model accepts a given kind
  *              before pointing `family` at it.
  */
+/* ----------------------------------------------------------------------- */
+/* Voice Activity Detection (optional, via audiocpp.dll at runtime)         */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * VAD algorithm selection. VAD is an OPTIONAL preprocessing step before
+ * the family decoder: it slices the input PCM into speech-bounded windows
+ * so long / sparse audio decodes faster and more accurately. It is OFF by
+ * default; enabling it requires audiocpp.dll to be loadable at runtime
+ * (see transcribe_vad_params.dll_path discovery order). If VAD cannot load
+ * (dll missing / symbol mismatch), transcribe_run silently falls back to
+ * the full-buffer decode with a WARN log — VAD is an enhancement, never a
+ * hard requirement.
+ *
+ * Streaming runs (transcribe_stream_*) never use VAD.
+ *
+ * NOTE: transcribe_vad / transcribe_free_vad symbols only exist when
+ * transcribe.cpp was built with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1. Calling
+ * them against a build without the flag is a link error. The
+ * run_params.vad field, by contrast, always exists (parsed as OFF when
+ * the flag was off at build time).
+ */
+typedef enum {
+    TRANSCRIBE_VAD_OFF    = 0, /* default: full-buffer decode, no VAD */
+    TRANSCRIBE_VAD_SILERO = 1, /* neural VAD via audiocpp.dll (needs model) */
+    TRANSCRIBE_VAD_ENERGY = 2, /* energy/RMS VAD via audiocpp.dll (no model) */
+} transcribe_vad_mode;
+
+/*
+ * VAD configuration. Embedded in transcribe_run_params.vad. Zero-init
+ * (which transcribe_run_params_init performs) means mode=OFF and all
+ * numeric defaults resolved at runtime.
+ */
+struct transcribe_vad_params {
+    uint64_t struct_size; /* sizeof(struct transcribe_vad_params) */
+
+    transcribe_vad_mode mode; /* default OFF */
+
+    const char * dll_path; /* NULL -> discovery order:
+                             *   1. this field
+                             *   2. env TRANSCRIBE_VAD_DLL
+                             *   3. executable dir
+                             *   4. cwd
+                             *   5. system PATH (LoadLibrary default) */
+
+    const char * weight_path; /* NULL. Reserved for a future non-embedded
+                               * audiocpp.dll; the current dll bakes Silero
+                               * weights in and ignores this. */
+
+    int backend;   /* 0 = CPU; forwarded to audiocpp AUDIOCPP_BACKEND_*.
+                    * The dll ships CPU+CUDA/ROCm/SYCL/Vulkan; pick via this
+                    * field, not by swapping dlls. */
+    int device_id; /* GPU index; ignored on CPU */
+    int n_threads; /* 0 = auto */
+
+    int64_t max_chunk_ms; /* per-window ceiling; <=0 -> family
+                           * effective_max_audio_ms (via
+                           * transcribe_session_get_limits), or 30000 if
+                           * that is 0/unbounded */
+    int64_t merge_gap_ms; /* default 500; <=0 -> never merge */
+    int64_t padding_ms;   /* default 250; <0 -> 0 */
+
+    /* Silero tuning (SILERO mode only). <=0 / 0 means "use audiocpp
+     * defaults" (threshold 0.5, min_speech 250ms, min_silence 100ms).
+     * Forwarded to audiocpp_vad as an options_json string. */
+    float   silero_threshold;       /* default 0.5; <=0 -> default */
+    int64_t silero_min_speech_ms;   /* default 250; <=0 -> default */
+    int64_t silero_min_silence_ms;  /* default 100; <=0 -> default */
+};
+
+/*
+ * One speech segment, ms-resolution. Returned by transcribe_vad (the
+ * standalone API) and used internally. Caller frees the array with
+ * transcribe_free_vad.
+ */
+typedef struct {
+    int64_t start_ms;
+    int64_t end_ms;
+    float   confidence;
+} transcribe_vad_segment;
+
 struct transcribe_run_params {
     uint64_t struct_size;
 
@@ -1099,6 +1180,15 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    /*
+     * vad: optional VAD preprocessing. Zero-initialized by
+     * transcribe_run_params_init, which sets mode=OFF. Callers built
+     * against an older header (smaller struct_size) are detected at
+     * runtime and treated as OFF — VAD never changes behavior for
+     * existing callers. See transcribe_vad_mode / transcribe_vad_params.
+     */
+    struct transcribe_vad_params vad;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);

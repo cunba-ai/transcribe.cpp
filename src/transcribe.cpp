@@ -583,6 +583,9 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     // Default to AUTO (richest output compatible with the model and selected
     // run tasks, resolved per-family) rather than the memset NONE.
     p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
+    // VAD: memset already zeroed vad.* (mode=OFF, struct_size=0). Record the
+    // sub-struct size so internal code can trust vad.struct_size.
+    p->vad.struct_size = sizeof(p->vad);
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {
