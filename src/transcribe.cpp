@@ -27,6 +27,8 @@
 #include "transcribe-path.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe-vad.h"
+#include "transcribe-vad-integrate.h"
 #include "transcribe/whisper.h"
 
 #if defined(TRANSCRIBE_GGML_BACKEND_DL) && defined(_WIN32)
@@ -2187,6 +2189,23 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
 
     if (session->model == nullptr || session->model->arch == nullptr || session->model->arch->run == nullptr) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    // VAD preprocessing branch (optional, default OFF). When enabled, slice
+    // the input into speech-bounded windows via audiocpp.dll and decode each
+    // separately, merging results. Any VAD-side failure degrades to the
+    // original full-buffer decode so VAD can never break existing behavior.
+    if (transcribe::vad::effective_mode(params) != TRANSCRIBE_VAD_OFF) {
+        bool               degraded = false;
+        const transcribe_status vst =
+            transcribe::vad::run_with_vad(session, pcm, n_samples, params, degraded);
+        if (!degraded) {
+            return vst;
+        }
+        // degraded == true: fall through to the original arch->run path.
+        // run_with_vad may have touched session result fields on its failed
+        // branch; clear them so the full-buffer run starts clean.
+        session->clear_result();
     }
 
     return session->model->arch->run(session, pcm, n_samples, params);
