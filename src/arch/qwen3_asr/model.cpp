@@ -82,8 +82,12 @@ constexpr const char k_default_variant[] = "qwen3-asr";
 // transcript that fills the generation budget before end-of-stream is flagged
 // via transcribe_was_truncated().
 
-// Per-run generation budget (matches the reference dumper default).
-constexpr int k_max_new = 256;
+// Per-run generation budget. audio.cpp uses 512 (Qwen3ASRAssets default in
+// assets.h:65; the shipped generation_config.json omits max_new_tokens so the
+// struct default wins). transcribe.cpp previously hardcoded 256, which
+// truncated any chunk longer than a few seconds — visible once VAD chunking
+// feeds per-chunk decodes. 512 matches the reference runtime.
+constexpr int k_max_new = 512;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
 // optionally lowered — never raised — by the caller's session n_ctx knob.

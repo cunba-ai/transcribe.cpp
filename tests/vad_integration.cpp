@@ -121,7 +121,9 @@ transcribe_status run_asr(const std::string & model_path,
 
     transcribe_run_params rp;
     transcribe_run_params_init(&rp);
-    rp.language = "en";  // meeting.wav is English
+    // Leave rp.language NULL so Qwen3-ASR auto-detects. The fixture
+    // (meeting.wav) is Chinese; forcing "en" makes the model not converge to
+    // EOS and run into the generation budget (OUTPUT_TRUNCATED).
     if (vad_mode != TRANSCRIBE_VAD_OFF) {
         rp.vad.mode    = vad_mode;
         // VAD backend: CPU (0) by default to isolate VAD logic from GPU
