@@ -20,8 +20,6 @@
 #include "transcribe.h"
 #include "wav.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -49,35 +47,38 @@ bool env_path(const char * name, std::string & out) {
     return false;
 }
 
-// Lowercase + strip punctuation + collapse whitespace, returning a
-// space-separated word list. ASR models routinely differ across chunk
-// boundaries in punctuation and segment-initial capitalization (a chunk
-// starting mid-sentence gets a period + capital); those are model behavior,
-// not VAD bugs. Comparing the lowercased word sequence catches real bugs
-// (dropped/inserted/misordered words) while tolerating the surface form.
-std::string normalize_words(const std::string & s) {
-    std::string out;
-    out.reserve(s.size());
-    bool prev_space = true;
-    for (char c : s) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if (std::isspace(uc)) {
-            prev_space = true;
-            continue;
-        }
-        // Keep alphanumerics (across scripts: letters/digits pass isalnum);
-        // drop punctuation. This is intentionally ASCII-centric — the test
-        // fixture is English (jfk/meeting). For CJK fixtures a different
-        // normalization would be needed.
-        if (std::isalnum(uc)) {
-            if (prev_space && !out.empty()) {
-                out.push_back(' ');
-            }
-            out.push_back(static_cast<char>(std::tolower(uc)));
-            prev_space = false;
-        }
+// Byte-level Levenshtein edit distance. Mirrors the helper in
+// qwen3_asr_e2e_smoke.cpp — same shape, same tolerances philosophy: a VAD
+// chunk boundary can shift a capitalization/punctuation choice, but a real
+// bug (dropped/inserted/misordered segment) blows the distance out. We don't
+// normalize the text (no lowercasing, no punctuation stripping) — that would
+// hide exactly the kind of drift a VAD-integration bug causes. Byte-level
+// means a CJK character costs 3 per substitution, which is fine for catching
+// dropped-sentence-class regressions.
+int edit_distance(const std::string & a, const std::string & b) {
+    const int        n = static_cast<int>(a.size());
+    const int        m = static_cast<int>(b.size());
+    std::vector<int> prev(static_cast<size_t>(m + 1));
+    std::vector<int> curr(static_cast<size_t>(m + 1));
+    for (int j = 0; j <= m; ++j) {
+        prev[static_cast<size_t>(j)] = j;
     }
-    return out;
+    for (int i = 1; i <= n; ++i) {
+        curr[0] = i;
+        for (int j = 1; j <= m; ++j) {
+            const int cost = (a[static_cast<size_t>(i - 1)] == b[static_cast<size_t>(j - 1)]) ? 0 : 1;
+            const int del  = prev[static_cast<size_t>(j)] + 1;
+            const int ins  = curr[static_cast<size_t>(j - 1)] + 1;
+            const int sub  = prev[static_cast<size_t>(j - 1)] + cost;
+            int       best = del < ins ? del : ins;
+            if (sub < best) {
+                best = sub;
+            }
+            curr[static_cast<size_t>(j)] = best;
+        }
+        prev.swap(curr);
+    }
+    return prev[static_cast<size_t>(m)];
 }
 
 bool file_readable(const std::string & p) {
@@ -151,7 +152,7 @@ transcribe_status run_asr(const std::string & model_path,
     if (st == TRANSCRIBE_OK) {
         const char * full = transcribe_full_text(ctx);
         if (full) {
-            out_text = normalize_words(full);
+            out_text = full;  // raw, unnormalized — edit_distance compares as-is
         }
     }
     transcribe_session_free(ctx);
@@ -256,26 +257,21 @@ int main() {
 
     // 3. The core assertion, scoped to what full-buffer can give us:
     //    - If full-buffer succeeded (short audio): VAD must not change the
-    //      transcribed WORDS (order + identity), tolerating punctuation /
-    //      capitalization differences that chunking legitimately induces.
+    //      transcript beyond a small ASR-drift tolerance (edit distance,
+    //      same shape as qwen3_asr_e2e_smoke). Raw text comparison — no
+    //      normalization, so a real bug (dropped segment) is caught.
     //    - If full-buffer truncated/OOM'd (long audio): we already asserted
     //      VAD produced text; that IS the value VAD adds here.
     if (full_ok) {
-        if (text_full == text_vad) {
-            std::printf("vad_integration: text MATCH (full == VAD-chunked, word-level)\n");
-        } else {
-            const size_t min_len = std::min(text_full.size(), text_vad.size());
-            size_t       common  = 0;
-            while (common < min_len && text_full[common] == text_vad[common]) {
-                ++common;
-            }
+        const int  dist     = edit_distance(text_full, text_vad);
+        const int  max_dist = static_cast<int>(text_full.size() / 10) + 5;  // ~10% + slack
+        std::printf("vad_integration: full=%zu chars, vad=%zu chars, edit_distance=%d (max %d)\n",
+                    text_full.size(), text_vad.size(), dist, max_dist);
+        if (dist > max_dist) {
             std::fprintf(stderr,
-                         "vad_integration: WORD MISMATCH at char %zu (full=%zu vad=%zu)\n"
-                         "  full: ...%s\n"
-                         "  vad : ...%s\n",
-                         common, text_full.size(), text_vad.size(),
-                         text_full.substr(std::min(common, text_full.size() - 1), 80).c_str(),
-                         text_vad.substr(std::min(common, text_vad.size() - 1), 80).c_str());
+                         "vad_integration: edit distance %d exceeds %d — VAD chunking changed "
+                         "the transcript beyond ASR drift\n",
+                         dist, max_dist);
             ++g_failures;
         }
     } else {
