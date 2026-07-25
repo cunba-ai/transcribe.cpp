@@ -364,6 +364,23 @@ add_test(NAME transcribe_vad_plan_unit
     COMMAND transcribe_vad_plan_unit)
 
 # -----------------------------------------------------------------------------
+# VAD per-chunk result merge (timestamp offset + cross-index fixup)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_merge_unit
+    vad_merge_unit.cpp)
+
+target_link_libraries(transcribe_vad_merge_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_vad_merge_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_vad_merge_unit)
+
+add_test(NAME transcribe_vad_merge_unit
+    COMMAND transcribe_vad_merge_unit)
+
+# -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
 # -----------------------------------------------------------------------------
 #
