@@ -330,6 +330,23 @@ add_test(NAME transcribe_vad_params_unit
     COMMAND transcribe_vad_params_unit)
 
 # -----------------------------------------------------------------------------
+# audiocpp.dll loader (failure path; success path is local-run integration)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_loader_unit
+    vad_loader_unit.cpp)
+
+target_link_libraries(transcribe_vad_loader_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_vad_loader_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_vad_loader_unit)
+
+add_test(NAME transcribe_vad_loader_unit
+    COMMAND transcribe_vad_loader_unit)
+
+# -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
 # -----------------------------------------------------------------------------
 #

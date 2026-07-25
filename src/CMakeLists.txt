@@ -38,6 +38,7 @@ add_library(transcribe ${_transcribe_lib_type}
     transcribe-bin-loader.cpp
     transcribe-batch-util.cpp
     transcribe-vad.cpp
+    transcribe-vad-audiocpp.cpp
     conformer/conformer.cpp
     sanm/sanm.cpp
     causal_lm/causal_lm.cpp
