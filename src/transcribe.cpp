@@ -27,9 +27,11 @@
 #include "transcribe-path.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
-#include "transcribe-vad-audiocpp.h"
-#include "transcribe-vad.h"
-#include "transcribe-vad-integrate.h"
+#include "transcribe-vad.h"  // effective_mode / params_present always compiled
+#if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
+#  include "transcribe-vad-audiocpp.h"
+#  include "transcribe-vad-integrate.h"
+#endif
 #include "transcribe/whisper.h"
 
 #if defined(TRANSCRIBE_GGML_BACKEND_DL) && defined(_WIN32)
@@ -2197,9 +2199,13 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     // the input into speech-bounded windows via audiocpp.dll and decode each
     // separately, merging results. Any VAD-side failure degrades to the
     // original full-buffer decode so VAD can never break existing behavior.
+    // Gated on TRANSCRIBE_VAD_VIA_AUDIOCPP: without it the audiocpp-backed
+    // impl isn't compiled, effective_mode always returns OFF, and this block
+    // is absent so there's zero overhead.
+#if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
     if (transcribe::vad::effective_mode(params) != TRANSCRIBE_VAD_OFF) {
-        bool               degraded = false;
-        const transcribe_status vst =
+        bool                     degraded = false;
+        const transcribe_status  vst =
             transcribe::vad::run_with_vad(session, pcm, n_samples, params, degraded);
         if (!degraded) {
             return vst;
@@ -2209,6 +2215,7 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
         // branch; clear them so the full-buffer run starts clean.
         session->clear_result();
     }
+#endif
 
     return session->model->arch->run(session, pcm, n_samples, params);
 }
@@ -3224,6 +3231,7 @@ extern "C" transcribe_status transcribe_run(struct transcribe_session *         
     return api_guard_status("transcribe_run", [&] { return transcribe_run_impl(session, pcm, n_samples, params); });
 }
 
+#if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
 extern "C" transcribe_status transcribe_vad(const float *                         pcm,
                                             int                                  n_samples,
                                             int                                  sample_rate,
@@ -3299,6 +3307,7 @@ extern "C" transcribe_status transcribe_vad(const float *                       
 extern "C" void transcribe_free_vad(struct transcribe_vad_segment * segments) {
     api_guard_void("transcribe_free_vad", [&] { std::free(segments); });
 }
+#endif  // TRANSCRIBE_VAD_VIA_AUDIOCPP
 
 extern "C" transcribe_status transcribe_run_batch(struct transcribe_session *          session,
                                                   const float * const *                pcm,

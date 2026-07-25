@@ -4,6 +4,13 @@
 // run_with_vad body (co-located with the run_one_inner change so the VAD
 // branch and degrade path land together).
 
+// Double-insurance: this TU is only added to the build when
+// TRANSCRIBE_VAD_VIA_AUDIOCPP is on (see src/CMakeLists.txt). The #error
+// catches a hand-edited build that tries to compile it unconditionally.
+#if !defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) || (TRANSCRIBE_VAD_VIA_AUDIOCPP == 0)
+#  error "transcribe-vad-integrate.cpp requires -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1"
+#endif
+
 #include "transcribe-vad-integrate.h"
 #include "transcribe-vad-audiocpp.h"
 #include "transcribe-vad.h"
