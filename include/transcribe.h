@@ -1139,11 +1139,34 @@ struct transcribe_vad_params {
  * standalone API) and used internally. Caller frees the array with
  * transcribe_free_vad.
  */
-typedef struct {
+typedef struct transcribe_vad_segment {
     int64_t start_ms;
     int64_t end_ms;
     float   confidence;
 } transcribe_vad_segment;
+
+/*
+ * Standalone VAD: detect speech segments without running ASR. Does NOT
+ * require a transcribe_session. out_segments is a calloc'd array of
+ * *out_n_segments entries; caller owns it and must free with
+ * transcribe_free_vad. Returns TRANSCRIBE_OK on success (including when 0
+ * segments are found — *out_segments is NULL, *out_n_segments is 0). On
+ * VAD failure (dll missing, etc.) returns TRANSCRIBE_ERR_BACKEND; the
+ * reason is logged via transcribe_log_set's sink. sample_rate must be 16000.
+ *
+ * NOTE: only exists when transcribe.cpp was built with
+ * -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1; a link error otherwise (see the note
+ * above transcribe_vad_mode).
+ */
+TRANSCRIBE_API transcribe_status transcribe_vad(const float *                         pcm,
+                                                int                                  n_samples,
+                                                int                                  sample_rate,
+                                                const struct transcribe_vad_params * vad_params,
+                                                struct transcribe_vad_segment **     out_segments,
+                                                int64_t *                            out_n_segments);
+
+/* Free a segment array returned by transcribe_vad. Safe on NULL. */
+TRANSCRIBE_API void transcribe_free_vad(struct transcribe_vad_segment * segments);
 
 struct transcribe_run_params {
     uint64_t struct_size;
