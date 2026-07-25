@@ -58,74 +58,120 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
     std::sort(segs.begin(), segs.end(),
               [](const time_span & a, const time_span & b) { return a.start_ms < b.start_ms; });
 
-    // 2. Merge segments separated by < merge_gap_ms into windows. A window
-    // is the union [first.start, last.end] of a run of near-adjacent segs.
-    // (merge_gap_ms <= 0 means never merge — each seg is its own window
-    // candidate, subject to the max_chunk split below.) We also record the
-    // internal gap end-offsets so step 3 can prefer them as split points.
-    struct window {
-        int64_t               start_ms;
-        int64_t               end_ms;
-        std::vector<int64_t>  gap_offsets;  // end_ms of each merged-in predecessor seg
+    // 2+3. Greedily pack speech segments into windows up to max_chunk_ms,
+    // splitting at internal silence gaps when a window would overflow.
+    // Direct port of audio.cpp's plan_vad_audio_chunks (chunking.cpp:152-261),
+    // verified correct on meeting.wav (~92 chunks for 23min at 15s, matching
+    // the reference). The earlier "merge only gap < merge_gap_ms" version
+    // left meeting.wav's >500ms-gap segments as separate chunks (~380 vs
+    // ~92), 4x-ing the per-chunk cold-start cost.
+    //
+    // Algorithm (ms units; audio.cpp uses samples, same logic): each padded
+    // segment is fed to a state machine that either folds it into the
+    // current window (if it fits the max_chunk budget) or closes the current
+    // window and opens a new one. Overflows prefer to close at the silence
+    // gap before the new segment; if none, hard-cut at max_chunk.
+    struct ChunkState {
+        int64_t span_start_ms;
+        int64_t span_end_ms;
+        int64_t speech_end_ms;  // furthest speech seen in this window
     };
-    std::vector<window> windows;
-    window              cur{segs[0].start_ms, segs[0].end_ms, {}};
-    for (size_t i = 1; i < segs.size(); ++i) {
-        const int64_t gap = segs[i].start_ms - cur.end_ms;
-        if (merge_gap_ms > 0 && gap < merge_gap_ms) {
-            if (gap > 0) {
-                cur.gap_offsets.push_back(cur.end_ms);  // candidate split point
-            }
-            cur.end_ms = segs[i].end_ms;
-        } else {
-            windows.push_back(std::move(cur));
-            cur = window{segs[i].start_ms, segs[i].end_ms, {}};
-        }
-    }
-    windows.push_back(std::move(cur));
+    std::vector<ChunkState> states;
+    const int64_t           pad = padding_ms > 0 ? padding_ms : 0;
+    const bool              has_ceiling = max_chunk_ms > 0;
 
-    // 3. Split windows exceeding max_chunk_ms (<=0 means no ceiling). Prefer
-    // splitting at the largest internal gap that keeps the left half <=
-    // ceiling; if no usable gap exists or a single seg exceeds the ceiling,
-    // hard-split at max_chunk_ms.
-    const bool has_ceiling = max_chunk_ms > 0;
-    std::vector<window> split;
-    for (auto & w : windows) {
-        if (!has_ceiling || (w.end_ms - w.start_ms) <= max_chunk_ms) {
-            split.push_back(std::move(w));
-            continue;
-        }
-        int64_t              win_start = w.start_ms;
-        auto                 gaps = w.gap_offsets;  // copy; consumed from front
-        size_t               gi = 0;
-        while (win_start < w.end_ms && (w.end_ms - win_start) > max_chunk_ms) {
-            int64_t cut = win_start + max_chunk_ms;  // hard-cut default
-            // Prefer a gap in (win_start, win_start + max_chunk_ms] closest
-            // to the ceiling (largest gap keeps windows full).
-            for (; gi < gaps.size() && gaps[gi] <= win_start + max_chunk_ms; ++gi) {
-                if (gaps[gi] > win_start) {
-                    cut = gaps[gi];
+    auto padded_start = [&](int64_t s) { return std::max<int64_t>(s - pad, 0); };
+    auto padded_end   = [&](int64_t e) { return std::min<int64_t>(e + pad, total_ms); };
+    auto start_chunk  = [&](int64_t & span_start, int64_t span_end, int64_t speech_start, int64_t speech_end) {
+        int64_t chunk_end = has_ceiling ? std::min<int64_t>(span_end, span_start + max_chunk_ms) : span_end;
+        int64_t se = (chunk_end > speech_start) ? std::min<int64_t>(speech_end, chunk_end) : span_start;
+        states.push_back(ChunkState{span_start, chunk_end, se});
+        span_start = chunk_end;
+    };
+
+    for (const auto & seg : segs) {
+        int64_t span_start = padded_start(seg.start_ms);
+        const int64_t span_end   = padded_end(seg.end_ms);
+        const int64_t speech_start = seg.start_ms;
+        const int64_t speech_end   = seg.end_ms;
+        while (span_start < span_end) {
+            if (!states.empty()) {
+                ChunkState & cur = states.back();
+                if (span_end <= cur.span_end_ms) {
+                    // segment fully inside current window
+                    cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
+                    break;
+                }
+                if (span_start <= cur.span_end_ms) {
+                    // overlaps current window
+                    if (!has_ceiling) {
+                        cur.span_end_ms = span_end;
+                        cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
+                        break;
+                    }
+                    const int64_t capacity_end = cur.span_start_ms + max_chunk_ms;
+                    if (span_end <= capacity_end) {
+                        // fits in budget: grow current window
+                        cur.span_end_ms = span_end;
+                        cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
+                        break;
+                    }
+                    // overflows budget: prefer closing at the silence gap before
+                    // this segment, then re-enter the loop to open a fresh window.
+                    if (speech_start > cur.speech_end_ms && cur.speech_end_ms > cur.span_start_ms) {
+                        const int64_t boundary = std::min<int64_t>(cur.span_end_ms, speech_start);
+                        if (boundary >= cur.speech_end_ms && boundary > cur.span_start_ms) {
+                            cur.span_end_ms = boundary;
+                            span_start = boundary;
+                            start_chunk(span_start, span_end, speech_start, speech_end);
+                            continue;
+                        }
+                    }
+                    // no usable gap: extend current to capacity, reprocess remainder
+                    if (cur.span_end_ms < capacity_end) {
+                        cur.span_end_ms = std::min<int64_t>(span_end, capacity_end);
+                        if (cur.span_end_ms > speech_start) {
+                            cur.speech_end_ms = std::max(cur.speech_end_ms,
+                                                         std::min<int64_t>(speech_end, cur.span_end_ms));
+                        }
+                        span_start = cur.span_end_ms;
+                        continue;
+                    }
+                } else if (has_ceiling) {
+                    // disjoint from current window
+                    const int64_t gap = span_start - cur.span_end_ms;
+                    if (merge_gap_ms > 0 && gap <= merge_gap_ms &&
+                        span_end - cur.span_start_ms <= max_chunk_ms) {
+                        cur.span_end_ms = span_end;
+                        cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
+                        break;
+                    }
+                } else {
+                    // disjoint, no ceiling: merge (one unbounded window)
+                    cur.span_end_ms = span_end;
+                    cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
+                    break;
                 }
             }
-            split.push_back(window{win_start, cut, {}});
-            win_start = cut;
-        }
-        if (win_start < w.end_ms) {
-            split.push_back(window{win_start, w.end_ms, {}});
+            start_chunk(span_start, span_end, speech_start, speech_end);
         }
     }
 
-    // 4. Build chunk_plan with padding. source_span = [start-pad, end+pad]
-    // clamped to [0, total_ms]; keep_span = [start, end] (no padding).
-    const int64_t pad = padding_ms > 0 ? padding_ms : 0;
-    for (const auto & w : split) {
+    // 4. Build chunk_plan. source_span is the merged padded window;
+    // keep_span strips padding back to the speech core (clamped, non-empty).
+    for (const auto & st : states) {
         chunk_plan cp;
-        cp.keep_span.start_ms     = w.start_ms;
-        cp.keep_span.end_ms       = w.end_ms;
-        cp.keep_span.confidence   = 1.0f;
-        cp.source_span.start_ms   = std::max<int64_t>(w.start_ms - pad, 0);
-        cp.source_span.end_ms     = std::min<int64_t>(w.end_ms + pad, total_ms);
+        cp.source_span.start_ms   = st.span_start_ms;
+        cp.source_span.end_ms     = st.span_end_ms;
         cp.source_span.confidence = 1.0f;
+        cp.keep_span.start_ms = std::max<int64_t>(st.span_start_ms + pad, 0);
+        cp.keep_span.end_ms   = std::min<int64_t>(st.span_end_ms - pad, total_ms);
+        if (cp.keep_span.end_ms <= cp.keep_span.start_ms) {
+            // padding ate the whole window (very short speech); keep it all
+            cp.keep_span.start_ms = st.span_start_ms;
+            cp.keep_span.end_ms   = st.span_end_ms;
+        }
+        cp.keep_span.confidence = 1.0f;
         out.push_back(cp);
     }
     return out;

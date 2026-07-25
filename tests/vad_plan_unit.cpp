@@ -59,14 +59,18 @@ void test_single_segment_one_window() {
 }
 
 void test_merge_small_gap() {
-    // two segs 1000ms apart, merge_gap=500 -> NOT merged (gap >= merge_gap)
+    // Greedy-pack semantics (mirrors audio.cpp): disjoint segments are merged
+    // into the current window when BOTH the gap <= merge_gap_ms AND the
+    // merged length fits max_chunk_ms. Here total length (1000-3500 = 2500ms)
+    // is well under the 15000ms ceiling, so both pairs merge into one window.
     auto w = plan({ms(1000, 2000), ms(2500, 3500)}, 10000, 15000, 500, 0);
-    CHECK(w.size() == 2);
-    // two segs 300ms apart, merge_gap=500 -> merged into one window
-    auto w2 = plan({ms(1000, 2000), ms(2300, 3300)}, 10000, 15000, 500, 0);
-    CHECK(w2.size() == 1);
-    CHECK(w2[0].keep_span.start_ms == 1000);
-    CHECK(w2[0].keep_span.end_ms == 3300);
+    CHECK(w.size() == 1);
+    CHECK(w[0].keep_span.start_ms == 1000);
+    CHECK(w[0].keep_span.end_ms == 3500);
+    // merge_gap=0 disables the disjoint-merge path: each segment is its own
+    // window (they don't overlap/touch, so greedy-pack leaves them separate).
+    auto w_sep = plan({ms(1000, 2000), ms(2500, 3500)}, 10000, 15000, 0, 0);
+    CHECK(w_sep.size() == 2);
 }
 
 void test_padding_clamped_at_boundaries() {
@@ -95,17 +99,18 @@ void test_split_oversized_window() {
 }
 
 void test_split_prefers_internal_gap() {
-    // Two segs separated by a 1000ms gap. With merge_gap=2000 (> gap) they
-    // merge into one 20s window; ceiling 15s forces a split. The planner
-    // should split at the speech-segment boundary inside the window (9500,
-    // the first seg's end = the start of the internal gap), NOT hard-cut
-    // at 15000 — splitting at a boundary keeps each decode window voiced.
+    // Two segs separated by a 1000ms gap, max_chunk=15000. Merging them would
+    // yield a 20000ms window which exceeds the ceiling, so the greedy-pack
+    // algorithm keeps them as two separate windows (the disjoint-merge path
+    // requires the merged length to fit max_chunk). Each window stays voiced
+    // and within budget — no hard mid-segment cut needed.
     auto w = plan({ms(0, 9500), ms(10500, 20000)}, 20000, 15000, 2000, 0);
     CHECK(w.size() == 2);
     CHECK(w[0].keep_span.start_ms == 0);
-    CHECK(w[0].keep_span.end_ms == 9500);  // cut at seg boundary, not 15000
-    CHECK(w[1].keep_span.start_ms == 9500);
+    CHECK(w[0].keep_span.end_ms == 9500);
+    CHECK(w[1].keep_span.start_ms == 10500);  // gap preserved (not fabricated 9500)
     CHECK(w[1].keep_span.end_ms == 20000);
+    assert_windows_sorted_nonoverlapping(w);
 }
 
 void test_split_hard_cut_when_no_gap() {
