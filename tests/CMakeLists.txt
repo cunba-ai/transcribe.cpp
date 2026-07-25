@@ -381,6 +381,24 @@ add_test(NAME transcribe_vad_merge_unit
     COMMAND transcribe_vad_merge_unit)
 
 # -----------------------------------------------------------------------------
+# VAD end-to-end against a real audiocpp.dll (NOT in CI; SKIP_RETURN_CODE 77)
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
+    add_executable(transcribe_vad_integration
+        vad_integration.cpp)
+    target_link_libraries(transcribe_vad_integration PRIVATE transcribe)
+    target_include_directories(transcribe_vad_integration PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    transcribe_apply_warnings(transcribe_vad_integration)
+    add_test(NAME transcribe_vad_integration
+        COMMAND transcribe_vad_integration)
+    # Clean SKIP when the dll or fixture is absent (CI has neither).
+    set_tests_properties(transcribe_vad_integration PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
 # -----------------------------------------------------------------------------
 #
