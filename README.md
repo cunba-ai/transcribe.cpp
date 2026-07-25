@@ -49,7 +49,26 @@ cmake --build build
 
 On Windows, see the [complete build guide](docs/build-windows.md) for Vulkan
 SDK setup, Visual Studio commands, and the short-build-root fallback for
-unusually deep checkouts.
+unusually deep checkouts. For local development with MSVC + optional CUDA,
+`scripts/build_windows.ps1` auto-detects the Visual Studio install, the CUDA
+toolkit, and the current GPU's compute capability (e.g. `sm_120a` on a
+Blackwell card) and drives CMake/Ninja via presets:
+
+```powershell
+# CUDA release, build only the CLI, auto-detect GPU arch
+.\scripts\build_windows.ps1 -Preset windows-cuda-release -Target transcribe-cli
+
+# CPU-only release, build the C ABI shared library
+.\scripts\build_windows.ps1 -Preset windows-cpu-release -Target transcribe
+
+# CUDA release + real-model tests (needs TRANSCRIBE_WHISPER_GGUF at run time)
+.\scripts\build_windows.ps1 -Preset windows-cuda-release -RealModelTests `
+    -Target transcribe_whisper_e2e_smoke
+```
+
+`-CudaArchitectures auto` (the default) probes the current GPU and builds only
+its arch — the fastest local build. Pass `-CudaArchitectures default` for the
+multi-arch distribution set, or `-Ccache` to enable incremental caching.
 
 For CUDA (Linux + NVIDIA GPU):
 
