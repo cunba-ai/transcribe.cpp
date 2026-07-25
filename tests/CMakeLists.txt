@@ -296,6 +296,23 @@ add_test(NAME transcribe_log_unit
     COMMAND transcribe_log_unit)
 
 # -----------------------------------------------------------------------------
+# Progress callback contract (setter stores, emit_progress forwards + cancel)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_progress_unit
+    vad_progress_unit.cpp)
+
+target_link_libraries(transcribe_vad_progress_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_vad_progress_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_vad_progress_unit)
+
+add_test(NAME transcribe_vad_progress_unit
+    COMMAND transcribe_vad_progress_unit)
+
+# -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
 # -----------------------------------------------------------------------------
 #

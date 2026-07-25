@@ -12,6 +12,7 @@
 
 #include "transcribe.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -226,6 +227,25 @@ struct transcribe_session {
             return true;
         }
         return false;
+    }
+
+    // Progress (set via transcribe_set_progress_callback). run() drivers /
+    // the VAD chunk loop call emit_progress() at chunk boundaries.
+    // Returns the callback's int: 0 = continue, non-0 = cancel requested.
+    // Semantics mirror audiocpp_progress_fn. Streaming runs do not fire it.
+    transcribe_progress_callback progress_cb       = nullptr;
+    void *                      progress_userdata = nullptr;
+
+    // Returns 0 if no callback installed or callback returned 0 (continue);
+    // non-zero if the callback requested cancellation.
+    int emit_progress(const char * stage, int64_t completed, int64_t total) {
+        if (progress_cb == nullptr) {
+            return 0;
+        }
+        const float frac = total > 0
+            ? std::clamp(static_cast<float>(completed) / static_cast<float>(total), 0.0f, 1.0f)
+            : 0.0f;
+        return progress_cb(frac, stage, completed, total, progress_userdata);
     }
 
     // Set by a run() driver when decode stops at the model's context /

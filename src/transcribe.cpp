@@ -1669,6 +1669,16 @@ extern "C" void transcribe_set_abort_callback(struct transcribe_session * sessio
     session->abort_userdata = user_data;
 }
 
+extern "C" void transcribe_set_progress_callback(struct transcribe_session *   session,
+                                                 transcribe_progress_callback cb,
+                                                 void *                        user_data) {
+    if (session == nullptr) {
+        return;
+    }
+    session->progress_cb       = cb;
+    session->progress_userdata = user_data;
+}
+
 extern "C" bool transcribe_was_aborted(const struct transcribe_session * session) {
     if (session == nullptr) {
         return false;

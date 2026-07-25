@@ -1650,6 +1650,53 @@ TRANSCRIBE_API void transcribe_set_abort_callback(struct transcribe_session * se
                                                   transcribe_abort_callback   cb,
                                                   void *                      user_data);
 
+/* ----------------------------------------------------------------------- */
+/* Progress callback                                                        */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Progress callback. Fires during offline transcribe_run() at chunk
+ * boundaries (VAD chunk loop today; per-family run() internals in a
+ * future phase). Semantics mirror audiocpp_progress_fn so client
+ * callback logic is portable between transcribe.cpp and audio.cpp.
+ *
+ *   progress        [0.0, 1.0]
+ *   stage           short label valid for the duration of the call,
+ *                   e.g. "asr+whisper". Do not retain the pointer.
+ *   completed_units chunks completed so far (0..total_units)
+ *   total_units     total chunks (>= 1)
+ *   user_data       opaque pointer from transcribe_set_progress_callback
+ *
+ * Return 0 to continue; non-zero to request cancellation. On cancel the
+ * in-flight run aborts at the next chunk boundary, preserves partial
+ * segments, and transcribe_run returns TRANSCRIBE_ERR_ABORTED. Cancel
+ * via this callback and via transcribe_set_abort_callback are equivalent
+ * end states; both are offered so client logic need not differ between
+ * transcribe.cpp and audio.cpp.
+ *
+ * The callback is invoked synchronously on the thread that called
+ * transcribe_run. It must not throw (a thrown exception is treated as a
+ * cancel request and contained at the emission site, never escaping the
+ * C ABI). Do not call transcribe_* APIs from inside the callback.
+ */
+typedef int (*transcribe_progress_callback)(float       progress,
+                                            const char * stage,
+                                            int64_t      completed_units,
+                                            int64_t      total_units,
+                                            void *       user_data);
+
+/*
+ * Install or clear the progress callback for a session. Passing cb=NULL
+ * clears a previously installed callback. Safe to call before or between
+ * runs; not concurrent with a run on the same session. The callback
+ * fires during subsequent transcribe_run() calls. Streaming runs
+ * (transcribe_stream_*) do NOT fire this callback — streaming progress
+ * remains pull-based via transcribe_stream_update.
+ */
+TRANSCRIBE_API void transcribe_set_progress_callback(struct transcribe_session *   session,
+                                                     transcribe_progress_callback cb,
+                                                     void *                        user_data);
+
 /*
  * True if the most recent transcribe_run was aborted by the installed
  * callback returning true. Reset to false at the top of each
