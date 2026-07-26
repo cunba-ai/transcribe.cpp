@@ -69,7 +69,7 @@
 [CmdletBinding()]
 param(
     [string]$Preset = "windows-cuda-release",
-    [string]$Target = "transcribe-cli",
+    [string]$Target = "transcribe",
     [int]$Jobs = 0,
     [switch]$ConfigureOnly,
     [switch]$Clean,
