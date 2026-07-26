@@ -269,6 +269,18 @@ struct cli_args {
     // explicit K. Silently ignored by families without
     // supports_spec_decode. Set by --spec-k-drafts N.
     int spec_k_drafts        = -1;
+    // VAD preprocessing (optional, requires audiocpp.dll at runtime and the
+    // library built with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON). "" = off (the
+    // default; transcribe_run_params_init zeroes vad.mode). Set by --vad-mode.
+    std::string vad_mode;  // "off" | "silero" | "energy"
+    // Path to audiocpp.dll; "" = discovery order (env TRANSCRIBE_VAD_DLL,
+    // exe dir, cwd, PATH). Set by --vad-dll.
+    std::string vad_dll;
+    // VAD compute backend forwarded to audiocpp (AUDIOCPP_BACKEND_*; the dll
+    // ships CPU+CUDA/ROCm/Vulkan). 0 = CPU. Set by --vad-backend. Mirrors the
+    // ASR --backend concept but for the VAD model inside audiocpp.dll.
+    int vad_backend = 0;
+    int vad_device  = 0;  // --vad-device N
 };
 
 void print_usage(const char * argv0) {
@@ -331,6 +343,17 @@ void print_usage(const char * argv0) {
                  "                        supports_spec_decode. -1 = family default,\n"
                  "                        0 = off, > 0 = explicit K. Silently ignored\n"
                  "                        by families without spec support.\n"
+                 "  --vad-mode MODE       optional VAD preprocessing before the decoder:\n"
+                 "                        off (default), silero (neural), energy (RMS).\n"
+                 "                        Requires the library built with\n"
+                 "                        -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON AND\n"
+                 "                        audiocpp.dll loadable at runtime; otherwise\n"
+                 "                        silently falls back to full-buffer decode.\n"
+                 "  --vad-dll PATH        path to audiocpp.dll (default: discovery order —\n"
+                 "                        env TRANSCRIBE_VAD_DLL, exe dir, cwd, PATH)\n"
+                 "  --vad-backend N       VAD compute backend inside audiocpp.dll:\n"
+                 "                        0=CPU (default), 1=CUDA, 2=Vulkan, 3=Metal, 4=SYCL\n"
+                 "  --vad-device N        VAD GPU device index (0 = auto)\n"
                  "  --list-devices        list registered compute devices (with memory)\n"
                  "                        and exit; ignores all other options\n"
                  "  -h, --help            show this help\n",
@@ -632,6 +655,46 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --spec-k-drafts must be -1 (family default), 0 (off), or > 0\n");
                 return false;
             }
+        } else if (a == "--vad-mode") {
+            // VAD preprocessing. Requires the library built with
+            // -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON AND audiocpp.dll loadable at
+            // runtime; otherwise transcribe_run silently falls back to the
+            // full-buffer decode with a WARN log.
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            const std::string vs = v;
+            if (vs == "off" || vs == "silero" || vs == "energy") {
+                out.vad_mode = vs;
+            } else {
+                std::fprintf(stderr, "error: --vad-mode must be off, silero, or energy\n");
+                return false;
+            }
+        } else if (a == "--vad-dll") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.vad_dll = v;
+        } else if (a == "--vad-backend") {
+            // AUDIOCPP_BACKEND_*: 0=CPU, 1=CUDA, 2=Vulkan, 3=Metal, 4=SYCL.
+            // Forwarded to the VAD model inside audiocpp.dll.
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.vad_backend = std::atoi(v);
+        } else if (a == "--vad-device") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.vad_device = std::atoi(v);
+            if (out.vad_device < 0) {
+                std::fprintf(stderr, "error: --vad-device must be >= 0 (0 = auto)\n");
+                return false;
+            }
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -786,6 +849,19 @@ int main(int argc, char ** argv) {
         }
         rp.timestamps    = args.timestamps;
         rp.spec_k_drafts = args.spec_k_drafts;
+
+        // VAD preprocessing (optional). --vad-mode off/silero/energy maps to
+        // rp.vad.mode; dll path + backend forwarded. Library must be built
+        // with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON for the field to take effect;
+        // otherwise it's parsed as OFF and transcribe_run runs full-buffer.
+        if (!args.vad_mode.empty() && args.vad_mode != "off") {
+            rp.vad.mode    = (args.vad_mode == "energy") ? TRANSCRIBE_VAD_ENERGY : TRANSCRIBE_VAD_SILERO;
+            rp.vad.backend = args.vad_backend;
+            rp.vad.device_id = args.vad_device;
+            if (!args.vad_dll.empty()) {
+                rp.vad.dll_path = args.vad_dll.c_str();
+            }
+        }
 
         if (args.itn_set) {
             rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON : TRANSCRIBE_ITN_MODE_OFF;
@@ -1198,6 +1274,19 @@ int main(int argc, char ** argv) {
         }
         rp.timestamps    = args.timestamps;
         rp.spec_k_drafts = args.spec_k_drafts;
+
+        // VAD preprocessing (optional). --vad-mode off/silero/energy maps to
+        // rp.vad.mode; dll path + backend forwarded. Library must be built
+        // with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON for the field to take effect;
+        // otherwise it's parsed as OFF and transcribe_run runs full-buffer.
+        if (!args.vad_mode.empty() && args.vad_mode != "off") {
+            rp.vad.mode    = (args.vad_mode == "energy") ? TRANSCRIBE_VAD_ENERGY : TRANSCRIBE_VAD_SILERO;
+            rp.vad.backend = args.vad_backend;
+            rp.vad.device_id = args.vad_device;
+            if (!args.vad_dll.empty()) {
+                rp.vad.dll_path = args.vad_dll.c_str();
+            }
+        }
 
         if (args.itn_set) {
             rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON : TRANSCRIBE_ITN_MODE_OFF;

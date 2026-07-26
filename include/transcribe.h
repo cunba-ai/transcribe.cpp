@@ -1064,6 +1064,110 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *              to probe whether the loaded model accepts a given kind
  *              before pointing `family` at it.
  */
+/* ----------------------------------------------------------------------- */
+/* Voice Activity Detection (optional, via audiocpp.dll at runtime)         */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * VAD algorithm selection. VAD is an OPTIONAL preprocessing step before
+ * the family decoder: it slices the input PCM into speech-bounded windows
+ * so long / sparse audio decodes faster and more accurately. It is OFF by
+ * default; enabling it requires audiocpp.dll to be loadable at runtime
+ * (see transcribe_vad_params.dll_path discovery order). If VAD cannot load
+ * (dll missing / symbol mismatch), transcribe_run silently falls back to
+ * the full-buffer decode with a WARN log — VAD is an enhancement, never a
+ * hard requirement.
+ *
+ * Streaming runs (transcribe_stream_*) never use VAD.
+ *
+ * NOTE: transcribe_vad / transcribe_free_vad symbols only exist when
+ * transcribe.cpp was built with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1. Calling
+ * them against a build without the flag is a link error. The
+ * run_params.vad field, by contrast, always exists (parsed as OFF when
+ * the flag was off at build time).
+ */
+typedef enum {
+    TRANSCRIBE_VAD_OFF    = 0, /* default: full-buffer decode, no VAD */
+    TRANSCRIBE_VAD_SILERO = 1, /* neural VAD via audiocpp.dll (needs model) */
+    TRANSCRIBE_VAD_ENERGY = 2, /* energy/RMS VAD via audiocpp.dll (no model) */
+} transcribe_vad_mode;
+
+/*
+ * VAD configuration. Embedded in transcribe_run_params.vad. Zero-init
+ * (which transcribe_run_params_init performs) means mode=OFF and all
+ * numeric defaults resolved at runtime.
+ */
+struct transcribe_vad_params {
+    uint64_t struct_size; /* sizeof(struct transcribe_vad_params) */
+
+    transcribe_vad_mode mode; /* default OFF */
+
+    const char * dll_path; /* NULL -> discovery order:
+                             *   1. this field
+                             *   2. env TRANSCRIBE_VAD_DLL
+                             *   3. executable dir
+                             *   4. cwd
+                             *   5. system PATH (LoadLibrary default) */
+
+    const char * weight_path; /* NULL. Reserved for a future non-embedded
+                               * audiocpp.dll; the current dll bakes Silero
+                               * weights in and ignores this. */
+
+    int backend;   /* 0 = CPU; forwarded to audiocpp AUDIOCPP_BACKEND_*.
+                    * The dll ships CPU+CUDA/ROCm/SYCL/Vulkan; pick via this
+                    * field, not by swapping dlls. */
+    int device_id; /* GPU index; ignored on CPU */
+    int n_threads; /* 0 = auto */
+
+    int64_t max_chunk_ms; /* per-window ceiling; <=0 -> family
+                           * effective_max_audio_ms (via
+                           * transcribe_session_get_limits), or 30000 if
+                           * that is 0/unbounded */
+    int64_t merge_gap_ms; /* default 500; <=0 -> never merge */
+    int64_t padding_ms;   /* default 250; <0 -> 0 */
+
+    /* Silero tuning (SILERO mode only). <=0 / 0 means "use audiocpp
+     * defaults" (threshold 0.5, min_speech 250ms, min_silence 100ms).
+     * Forwarded to audiocpp_vad as an options_json string. */
+    float   silero_threshold;       /* default 0.5; <=0 -> default */
+    int64_t silero_min_speech_ms;   /* default 250; <=0 -> default */
+    int64_t silero_min_silence_ms;  /* default 100; <=0 -> default */
+};
+
+/*
+ * One speech segment, ms-resolution. Returned by transcribe_vad (the
+ * standalone API) and used internally. Caller frees the array with
+ * transcribe_free_vad.
+ */
+typedef struct transcribe_vad_segment {
+    int64_t start_ms;
+    int64_t end_ms;
+    float   confidence;
+} transcribe_vad_segment;
+
+/*
+ * Standalone VAD: detect speech segments without running ASR. Does NOT
+ * require a transcribe_session. out_segments is a calloc'd array of
+ * *out_n_segments entries; caller owns it and must free with
+ * transcribe_free_vad. Returns TRANSCRIBE_OK on success (including when 0
+ * segments are found — *out_segments is NULL, *out_n_segments is 0). On
+ * VAD failure (dll missing, etc.) returns TRANSCRIBE_ERR_BACKEND; the
+ * reason is logged via transcribe_log_set's sink. sample_rate must be 16000.
+ *
+ * NOTE: only exists when transcribe.cpp was built with
+ * -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1; a link error otherwise (see the note
+ * above transcribe_vad_mode).
+ */
+TRANSCRIBE_API transcribe_status transcribe_vad(const float *                         pcm,
+                                                int                                  n_samples,
+                                                int                                  sample_rate,
+                                                const struct transcribe_vad_params * vad_params,
+                                                struct transcribe_vad_segment **     out_segments,
+                                                int64_t *                            out_n_segments);
+
+/* Free a segment array returned by transcribe_vad. Safe on NULL. */
+TRANSCRIBE_API void transcribe_free_vad(struct transcribe_vad_segment * segments);
+
 struct transcribe_run_params {
     uint64_t struct_size;
 
@@ -1099,6 +1203,15 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    /*
+     * vad: optional VAD preprocessing. Zero-initialized by
+     * transcribe_run_params_init, which sets mode=OFF. Callers built
+     * against an older header (smaller struct_size) are detected at
+     * runtime and treated as OFF — VAD never changes behavior for
+     * existing callers. See transcribe_vad_mode / transcribe_vad_params.
+     */
+    struct transcribe_vad_params vad;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);
@@ -1649,6 +1762,53 @@ typedef bool (*transcribe_abort_callback)(void * user_data);
 TRANSCRIBE_API void transcribe_set_abort_callback(struct transcribe_session * session,
                                                   transcribe_abort_callback   cb,
                                                   void *                      user_data);
+
+/* ----------------------------------------------------------------------- */
+/* Progress callback                                                        */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Progress callback. Fires during offline transcribe_run() at chunk
+ * boundaries (VAD chunk loop today; per-family run() internals in a
+ * future phase). Semantics mirror audiocpp_progress_fn so client
+ * callback logic is portable between transcribe.cpp and audio.cpp.
+ *
+ *   progress        [0.0, 1.0]
+ *   stage           short label valid for the duration of the call,
+ *                   e.g. "asr+whisper". Do not retain the pointer.
+ *   completed_units chunks completed so far (0..total_units)
+ *   total_units     total chunks (>= 1)
+ *   user_data       opaque pointer from transcribe_set_progress_callback
+ *
+ * Return 0 to continue; non-zero to request cancellation. On cancel the
+ * in-flight run aborts at the next chunk boundary, preserves partial
+ * segments, and transcribe_run returns TRANSCRIBE_ERR_ABORTED. Cancel
+ * via this callback and via transcribe_set_abort_callback are equivalent
+ * end states; both are offered so client logic need not differ between
+ * transcribe.cpp and audio.cpp.
+ *
+ * The callback is invoked synchronously on the thread that called
+ * transcribe_run. It must not throw (a thrown exception is treated as a
+ * cancel request and contained at the emission site, never escaping the
+ * C ABI). Do not call transcribe_* APIs from inside the callback.
+ */
+typedef int (*transcribe_progress_callback)(float       progress,
+                                            const char * stage,
+                                            int64_t      completed_units,
+                                            int64_t      total_units,
+                                            void *       user_data);
+
+/*
+ * Install or clear the progress callback for a session. Passing cb=NULL
+ * clears a previously installed callback. Safe to call before or between
+ * runs; not concurrent with a run on the same session. The callback
+ * fires during subsequent transcribe_run() calls. Streaming runs
+ * (transcribe_stream_*) do NOT fire this callback — streaming progress
+ * remains pull-based via transcribe_stream_update.
+ */
+TRANSCRIBE_API void transcribe_set_progress_callback(struct transcribe_session *   session,
+                                                     transcribe_progress_callback cb,
+                                                     void *                        user_data);
 
 /*
  * True if the most recent transcribe_run was aborted by the installed

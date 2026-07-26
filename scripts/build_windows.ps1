@@ -19,8 +19,13 @@
 
 .PARAMETER Preset
   windows-cpu-release   Release, CPU backend, native CPU + llamafile.
-  windows-cuda-release  Release, CUDA + CUDA graphs + native CPU + llamafile.
-  windows-cuda-debug    Debug, CUDA + CUDA graphs, tests on, /O2 /Zi.
+  windows-cuda-release  Release, CUDA + CUDA graphs + VAD glue + native CPU + llamafile.
+  windows-cuda-debug    Debug, CUDA + CUDA graphs + VAD glue, tests on, /O2 /Zi.
+
+  VAD glue (TRANSCRIBE_VAD_VIA_AUDIOCPP) compiles in the audiocpp.dll
+  dynamic-load path so --vad-mode works; audiocpp.dll itself is still
+  discovered at runtime (no build-time dependency). The CPU preset omits
+  it to keep the minimal library build dependency-free.
 
 .PARAMETER Target
   CMake target to build. Common: transcribe-cli (the CLI), transcribe (the
@@ -318,6 +323,7 @@ function Get-PresetSettings {
                 BuildExamples = "ON"; BuildTools = "OFF"
                 Native = "ON"; Llamafile = "ON"
                 EnableCuda = "OFF"; EnableCudaGraphs = "OFF"
+                EnableVadViaAudiocpp = "OFF"
                 CFlagsDebug = ""; CxxFlagsDebug = ""
             }
         }
@@ -327,6 +333,7 @@ function Get-PresetSettings {
                 BuildExamples = "ON"; BuildTools = "OFF"
                 Native = "ON"; Llamafile = "ON"
                 EnableCuda = "ON"; EnableCudaGraphs = "ON"
+                EnableVadViaAudiocpp = "ON"
                 CFlagsDebug = ""; CxxFlagsDebug = ""
             }
         }
@@ -336,6 +343,7 @@ function Get-PresetSettings {
                 BuildExamples = "ON"; BuildTools = "OFF"
                 Native = "ON"; Llamafile = "ON"
                 EnableCuda = "ON"; EnableCudaGraphs = "ON"
+                EnableVadViaAudiocpp = "ON"
                 CFlagsDebug = "/O2 /Zi"; CxxFlagsDebug = "/O2 /Zi"
             }
         }
@@ -435,7 +443,8 @@ $configureArgs = @(
     "-DTRANSCRIBE_BUILD_TESTS=$($settings.BuildTests)",
     "-DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=$($settings.BuildRealModelTests)",
     "-DTRANSCRIBE_BUILD_EXAMPLES=$($settings.BuildExamples)",
-    "-DTRANSCRIBE_BUILD_TOOLS=$($settings.BuildTools)"
+    "-DTRANSCRIBE_BUILD_TOOLS=$($settings.BuildTools)",
+    "-DTRANSCRIBE_VAD_VIA_AUDIOCPP=$($settings.EnableVadViaAudiocpp)"
 )
 $configureArgs += $cpuArchSettings.CMakeArgs
 if ($settings.CFlagsDebug -ne "") { $configureArgs += "-DCMAKE_C_FLAGS_DEBUG=$($settings.CFlagsDebug)" }
@@ -444,6 +453,11 @@ if ($isCudaPreset) {
     $configureArgs += "-DCUDAToolkit_ROOT=$(Convert-ToCMakePath $cudaRoot)"
     $configureArgs += "-DCMAKE_CUDA_HOST_COMPILER=$(Convert-ToCMakePath $cl)"
     $configureArgs += "-DCMAKE_CUDA_FLAGS=-Xcompiler=/utf-8"
+    # Forward the preset's CUDA-graphs setting. The preset sets
+    # EnableCudaGraphs but it was previously a dead value (read nowhere), so
+    # the build silently shipped with GGML_CUDA_GRAPHS=OFF. On a clean
+    # reconfigure the ggml cache default (OFF) took over, hiding the intent.
+    $configureArgs += "-DGGML_CUDA_GRAPHS=$($settings.EnableCudaGraphs)"
 }
 if ($isCudaPreset -and $arch -ne "") {
     $configureArgs += "-DCMAKE_CUDA_ARCHITECTURES=$arch"

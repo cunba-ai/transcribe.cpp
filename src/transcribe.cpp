@@ -27,6 +27,11 @@
 #include "transcribe-path.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe-vad.h"  // effective_mode / params_present always compiled
+#if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
+#  include "transcribe-vad-audiocpp.h"
+#  include "transcribe-vad-integrate.h"
+#endif
 #include "transcribe/whisper.h"
 
 #if defined(TRANSCRIBE_GGML_BACKEND_DL) && defined(_WIN32)
@@ -49,6 +54,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -583,6 +589,9 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     // Default to AUTO (richest output compatible with the model and selected
     // run tasks, resolved per-family) rather than the memset NONE.
     p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
+    // VAD: memset already zeroed vad.* (mode=OFF, struct_size=0). Record the
+    // sub-struct size so internal code can trust vad.struct_size.
+    p->vad.struct_size = sizeof(p->vad);
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {
@@ -1669,6 +1678,16 @@ extern "C" void transcribe_set_abort_callback(struct transcribe_session * sessio
     session->abort_userdata = user_data;
 }
 
+extern "C" void transcribe_set_progress_callback(struct transcribe_session *   session,
+                                                 transcribe_progress_callback cb,
+                                                 void *                        user_data) {
+    if (session == nullptr) {
+        return;
+    }
+    session->progress_cb       = cb;
+    session->progress_userdata = user_data;
+}
+
 extern "C" bool transcribe_was_aborted(const struct transcribe_session * session) {
     if (session == nullptr) {
         return false;
@@ -2175,6 +2194,28 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     if (session->model == nullptr || session->model->arch == nullptr || session->model->arch->run == nullptr) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
+
+    // VAD preprocessing branch (optional, default OFF). When enabled, slice
+    // the input into speech-bounded windows via audiocpp.dll and decode each
+    // separately, merging results. Any VAD-side failure degrades to the
+    // original full-buffer decode so VAD can never break existing behavior.
+    // Gated on TRANSCRIBE_VAD_VIA_AUDIOCPP: without it the audiocpp-backed
+    // impl isn't compiled, effective_mode always returns OFF, and this block
+    // is absent so there's zero overhead.
+#if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
+    if (transcribe::vad::effective_mode(params) != TRANSCRIBE_VAD_OFF) {
+        bool                     degraded = false;
+        const transcribe_status  vst =
+            transcribe::vad::run_with_vad(session, pcm, n_samples, params, degraded);
+        if (!degraded) {
+            return vst;
+        }
+        // degraded == true: fall through to the original arch->run path.
+        // run_with_vad may have touched session result fields on its failed
+        // branch; clear them so the full-buffer run starts clean.
+        session->clear_result();
+    }
+#endif
 
     return session->model->arch->run(session, pcm, n_samples, params);
 }
@@ -3189,6 +3230,84 @@ extern "C" transcribe_status transcribe_run(struct transcribe_session *         
                                             const struct transcribe_run_params * params) {
     return api_guard_status("transcribe_run", [&] { return transcribe_run_impl(session, pcm, n_samples, params); });
 }
+
+#if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
+extern "C" transcribe_status transcribe_vad(const float *                         pcm,
+                                            int                                  n_samples,
+                                            int                                  sample_rate,
+                                            const struct transcribe_vad_params * vad_params,
+                                            struct transcribe_vad_segment **     out_segments,
+                                            int64_t *                            out_n_segments) {
+    return api_guard_status("transcribe_vad", [&] {
+        if (pcm == nullptr || out_segments == nullptr || out_n_segments == nullptr) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (n_samples <= 0) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (sample_rate != 16000) {
+            // audiocpp Silero requires 16k; energy accepts arbitrary but we
+            // pin to 16k to match the library's mono-16k contract.
+            return TRANSCRIBE_ERR_SAMPLE_RATE;
+        }
+        *out_segments   = nullptr;
+        *out_n_segments = 0;
+
+        // Default vad_params if NULL: SILERO (sensible standalone default).
+        struct transcribe_vad_params vp;
+        std::memset(&vp, 0, sizeof(vp));
+        vp.struct_size = sizeof(vp);
+        vp.mode        = TRANSCRIBE_VAD_SILERO;
+        if (vad_params != nullptr) {
+            vp = *vad_params;
+        }
+
+        if (vp.mode == TRANSCRIBE_VAD_OFF) {
+            return TRANSCRIBE_OK;  // nothing to do, empty output
+        }
+
+        std::string err;
+        if (!transcribe::vad::audiocpp::runtime::instance().ensure_loaded(
+                vp.dll_path, vp.mode, vp.backend, vp.device_id, vp.n_threads, err)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_vad: load failed: %s", err.c_str());
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+
+        std::vector<transcribe::vad::time_span> speech;
+        try {
+            speech = transcribe::vad::vad_invoke(pcm, n_samples, vp);
+        } catch (const std::exception & e) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_vad: invoke failed: %s", e.what());
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+
+        // Copy out into a calloc'd array the caller frees via transcribe_free_vad.
+        const int64_t n = static_cast<int64_t>(speech.size());
+        if (n == 0) {
+            *out_segments   = nullptr;
+            *out_n_segments = 0;
+            return TRANSCRIBE_OK;
+        }
+        auto * arr = static_cast<transcribe_vad_segment *>(
+            std::calloc(static_cast<size_t>(n), sizeof(transcribe_vad_segment)));
+        if (arr == nullptr) {
+            return TRANSCRIBE_ERR_OOM;
+        }
+        for (int64_t i = 0; i < n; ++i) {
+            arr[i].start_ms   = speech[static_cast<size_t>(i)].start_ms;
+            arr[i].end_ms     = speech[static_cast<size_t>(i)].end_ms;
+            arr[i].confidence = speech[static_cast<size_t>(i)].confidence;
+        }
+        *out_segments   = arr;
+        *out_n_segments = n;
+        return TRANSCRIBE_OK;
+    });
+}
+
+extern "C" void transcribe_free_vad(struct transcribe_vad_segment * segments) {
+    api_guard_void("transcribe_free_vad", [&] { std::free(segments); });
+}
+#endif  // TRANSCRIBE_VAD_VIA_AUDIOCPP
 
 extern "C" transcribe_status transcribe_run_batch(struct transcribe_session *          session,
                                                   const float * const *                pcm,

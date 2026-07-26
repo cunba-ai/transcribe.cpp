@@ -296,6 +296,119 @@ add_test(NAME transcribe_log_unit
     COMMAND transcribe_log_unit)
 
 # -----------------------------------------------------------------------------
+# Progress callback contract (setter stores, emit_progress forwards + cancel)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_progress_unit
+    vad_progress_unit.cpp)
+
+target_link_libraries(transcribe_vad_progress_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_vad_progress_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_vad_progress_unit)
+
+add_test(NAME transcribe_vad_progress_unit
+    COMMAND transcribe_vad_progress_unit)
+
+# -----------------------------------------------------------------------------
+# VAD struct_size negotiation (backward compat: old callers stay OFF)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_params_unit
+    vad_params_unit.cpp)
+
+target_link_libraries(transcribe_vad_params_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_vad_params_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_vad_params_unit)
+
+add_test(NAME transcribe_vad_params_unit
+    COMMAND transcribe_vad_params_unit)
+
+# -----------------------------------------------------------------------------
+# audiocpp.dll loader (failure path; success path is local-run integration)
+# Gated: links load_audiocpp_dll which lives in transcribe-vad-audiocpp.cpp
+# (only compiled when TRANSCRIBE_VAD_VIA_AUDIOCPP=ON).
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
+    add_executable(transcribe_vad_loader_unit
+        vad_loader_unit.cpp)
+
+    target_link_libraries(transcribe_vad_loader_unit PRIVATE transcribe)
+
+    target_include_directories(transcribe_vad_loader_unit PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_vad_loader_unit)
+
+    add_test(NAME transcribe_vad_loader_unit
+        COMMAND transcribe_vad_loader_unit)
+endif()
+
+# -----------------------------------------------------------------------------
+# VAD chunk planner (pure function: merge / split / pad)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_plan_unit
+    vad_plan_unit.cpp)
+
+target_link_libraries(transcribe_vad_plan_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_vad_plan_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_vad_plan_unit)
+
+add_test(NAME transcribe_vad_plan_unit
+    COMMAND transcribe_vad_plan_unit)
+
+# -----------------------------------------------------------------------------
+# VAD per-chunk result merge (timestamp offset + cross-index fixup)
+# Gated: links offset_chunk_results/snapshot which live in
+# transcribe-vad-integrate.cpp (only compiled when VAD is on).
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
+    add_executable(transcribe_vad_merge_unit
+        vad_merge_unit.cpp)
+
+    target_link_libraries(transcribe_vad_merge_unit PRIVATE transcribe)
+
+    target_include_directories(transcribe_vad_merge_unit PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_vad_merge_unit)
+
+    add_test(NAME transcribe_vad_merge_unit
+        COMMAND transcribe_vad_merge_unit)
+endif()
+
+# -----------------------------------------------------------------------------
+# VAD end-to-end against a real audiocpp.dll (NOT in CI; SKIP_RETURN_CODE 77)
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
+    add_executable(transcribe_vad_integration
+        vad_integration.cpp)
+    # transcribe-common-example provides transcribe_cli::load_wav_mono_16k.
+    target_link_libraries(transcribe_vad_integration
+        PRIVATE transcribe transcribe-common-example)
+    target_include_directories(transcribe_vad_integration PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    transcribe_apply_warnings(transcribe_vad_integration)
+    add_test(NAME transcribe_vad_integration
+        COMMAND transcribe_vad_integration)
+    # Clean SKIP when the dll / model / fixture is absent (CI has none).
+    set_tests_properties(transcribe_vad_integration PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
 # -----------------------------------------------------------------------------
 #
