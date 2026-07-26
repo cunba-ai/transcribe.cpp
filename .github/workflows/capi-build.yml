@@ -272,6 +272,28 @@ jobs:
           version: ${{ env.VULKAN_VERSION }}
           cache: true
 
+      # ── Re-locate Vulkan SDK install root ───────────────────────────────
+      # humbletim/install-vulkan-sdk sets VULKAN_SDK to $basedir/VULKAN_SDK
+      # but the 1.4.350.0 installer extracts flat into that dir while older
+      # versions create a versioned subdir, so the action's VULKAN_SDK doesn't
+      # always contain Lib/vulkan-1.lib — CMake's FindVulkan then fails with
+      # "missing: Vulkan_LIBRARY Vulkan_INCLUDE_DIR". Walk the tree to find
+      # the dir that actually holds the SDK and re-export VULKAN_SDK + PATH.
+      - name: Locate Vulkan SDK install root
+        if: matrix.config.setup == 'vulkan'
+        shell: bash
+        run: |
+          LIB=$(find "$VULKAN_SDK" -name 'vulkan-1.lib' -print -quit)
+          if [ -z "$LIB" ]; then
+            echo "::error::vulkan-1.lib not found under $VULKAN_SDK"
+            exit 1
+          fi
+          SDK_ROOT=$(dirname "$(dirname "$LIB")")
+          echo "VULKAN_SDK was: $VULKAN_SDK"
+          echo "VULKAN_SDK now: $SDK_ROOT"
+          echo "VULKAN_SDK=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/bin" >> "$GITHUB_PATH"
+
       # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
       # Hosted runners have no AMD GPU, so this only proves configure/compile.
       # Best-effort (continue-on-error) — Linux ROCm is the reliable signal.
