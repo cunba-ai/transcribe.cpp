@@ -259,18 +259,20 @@ jobs:
           cuda: '12.9.0'
           method: 'network'
 
-      # ── Vulkan: LunarG SDK (provides glslang/glslc for shader compilation) ──
-      # Mirrors audio.cpp's capi-build Windows Vulkan lane (uses the same
-      # community action; thumbprint in lockstep with cuda-windows.yml /
-      # python-wheels.yml / rust-ci.yml). Only the SDK's glslc + headers are
-      # needed at build time; the runtime Vulkan loader (vulkan-1.dll) is
-      # supplied by the host/driver, never vendored.
-      - name: Setup Vulkan SDK
+      # ── Vulkan: LunarG SDK (glslc for the ggml-vulkan module) ─────────────
+      # Mirrors cuda-windows.yml / python-wheels.yml's wheel-windows lane —
+      # direct LunarG .exe installer with --accept-licenses/--confirm-command.
+      # Only the SDK's glslc + headers are needed at build time; the runtime
+      # Vulkan loader (vulkan-1.dll) is supplied by the host/driver, never
+      # vendored — see the manifest's libraries list (transcribe only).
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
         if: matrix.config.setup == 'vulkan'
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: ${{ env.VULKAN_VERSION }}
-          cache: true
+        shell: pwsh
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
       # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
       # Hosted runners have no AMD GPU, so this only proves configure/compile.
