@@ -41,6 +41,9 @@ permissions:
 env:
   CUDA_ARCHS: "61;70;75;80;86;89;120"
   AMDGPU_TARGETS: "gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+  # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+  # Keep in lockstep with cuda-windows.yml / python-wheels.yml / rust-ci.yml.
+  VULKAN_VERSION: "1.4.350.0"
   OSS_BUCKET: "miaosoft-internal"
   OSS_ENDPOINT: "oss-cn-shanghai.aliyuncs.com"
   OSS_PREFIX: "cunba.ai/transcribe.cpp"
@@ -51,7 +54,7 @@ concurrency:
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════
-  # Linux: CUDA+CPU, ROCm+CPU, SYCL+CPU
+  # Linux: CUDA+CPU, ROCm+CPU, SYCL+CPU, Vulkan+CPU
   # ════════════════════════════════════════════════════════════════════════
   linux:
     name: Linux ${{ matrix.config.name }}
@@ -74,6 +77,17 @@ jobs:
             container: intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04
             cmake_extra: '-DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL'
             artifact_suffix: linux-sycl-cpu
+          # Vulkan + CPU on a stock Ubuntu image (no vendor toolchain). Unlike
+          # the GPU-vendor lanes, this needs the Vulkan loader + glslc shader
+          # compiler on the build host: libvulkan-dev, glslc (glslang), and
+          # spirv-headers. Hosted runners have no Vulkan-capable GPU, so this
+          # only proves configure/compile/link — the runtime degradation
+          # contract is covered by native-ci.yml's provider-dl-vulkan lane.
+          - name: Vulkan-CPU
+            container: ubuntu:22.04
+            apt_extra: 'libvulkan-dev glslc spirv-headers'
+            cmake_extra: '-DTRANSCRIBE_VULKAN=ON'
+            artifact_suffix: linux-vulkan-cpu
 
     steps:
       - name: Checkout
@@ -86,7 +100,7 @@ jobs:
           # from inside GitHub Actions containers (transient connection drops).
           # patchelf: used in Collect artifacts to flatten the versioned
           # libtranscribe.so symlink chain into a single file (see there).
-          apt-get -o Acquire::Retries=5 install -y cmake git build-essential patchelf
+          apt-get -o Acquire::Retries=5 install -y cmake git build-essential patchelf ${{ matrix.config.apt_extra }}
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -178,7 +192,8 @@ jobs:
           path: artifacts/
 
   # ════════════════════════════════════════════════════════════════════════
-  # Windows: CUDA+CPU (primary), ROCm+CPU (best-effort), SYCL+CPU (best-effort)
+  # Windows: CUDA+CPU (primary), Vulkan+CPU, ROCm+CPU (best-effort),
+  #          SYCL+CPU (best-effort)
   # ════════════════════════════════════════════════════════════════════════
   windows:
     name: Windows ${{ matrix.config.name }}
@@ -191,6 +206,13 @@ jobs:
           - name: CUDA-CPU
             setup: cuda
             artifact_suffix: windows-cuda-cpu
+            best_effort: false
+          # Vulkan + CPU via the LunarG SDK (matches the wheel lanes'
+          # VULKAN_VERSION). Hosted runners have no Vulkan-capable GPU, so
+          # this only proves MSVC + glslc configure/compile/link.
+          - name: Vulkan-CPU
+            setup: vulkan
+            artifact_suffix: windows-vulkan-cpu
             best_effort: false
           - name: ROCm-CPU
             setup: rocm
@@ -217,6 +239,20 @@ jobs:
         with:
           cuda: '12.9.0'
           method: 'network'
+
+      # ── Vulkan: LunarG SDK (glslc for the ggml-vulkan module) ─────────────
+      # Mirrors cuda-windows.yml / python-wheels.yml's wheel-windows lane.
+      # Only the SDK's glslc + headers are needed at build time; the runtime
+      # Vulkan loader (vulkan-1.dll) is supplied by the host/driver, never
+      # vendored — see the manifest's libraries list (transcribe only).
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
+        if: matrix.config.setup == 'vulkan'
+        shell: pwsh
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
       # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
       # Hosted runners have no AMD GPU, so this only proves configure/compile.
@@ -314,6 +350,24 @@ jobs:
             -DTRANSCRIBE_CUDA=ON ^
             -DCMAKE_CUDA_ARCHITECTURES="${{ env.CUDA_ARCHS }}"
 
+      - name: Configure (Vulkan)
+        if: matrix.config.setup == 'vulkan'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DTRANSCRIBE_SHARED_EMBED=ON ^
+            -DTRANSCRIBE_INSTALL=ON ^
+            -DCMAKE_INSTALL_PREFIX=build/install ^
+            -DTRANSCRIBE_BUILD_TESTS=OFF ^
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF ^
+            -DTRANSCRIBE_BUILD_TOOLS=OFF ^
+            -DTRANSCRIBE_VULKAN=ON
+
       - name: Configure (ROCm)
         if: matrix.config.setup == 'rocm'
         shell: pwsh
@@ -362,6 +416,14 @@ jobs:
 
       - name: Build & install transcribe (CUDA)
         if: matrix.config.setup == 'cuda'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build build --parallel %NUMBER_OF_PROCESSORS% --target transcribe
+          cmake --install build
+
+      - name: Build & install transcribe (Vulkan)
+        if: matrix.config.setup == 'vulkan'
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
