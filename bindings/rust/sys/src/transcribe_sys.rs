@@ -325,6 +325,95 @@ const _: () = {
 unsafe extern "C" {
     pub fn transcribe_session_params_init(params: *mut transcribe_session_params);
 }
+impl transcribe_vad_mode {
+    pub const TRANSCRIBE_VAD_OFF: transcribe_vad_mode = transcribe_vad_mode(0);
+    pub const TRANSCRIBE_VAD_SILERO: transcribe_vad_mode = transcribe_vad_mode(1);
+    pub const TRANSCRIBE_VAD_ENERGY: transcribe_vad_mode = transcribe_vad_mode(2);
+}
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct transcribe_vad_mode(pub ::std::os::raw::c_uint);
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct transcribe_vad_params {
+    pub struct_size: u64,
+    pub mode: transcribe_vad_mode,
+    pub dll_path: *const ::std::os::raw::c_char,
+    pub weight_path: *const ::std::os::raw::c_char,
+    pub backend: ::std::os::raw::c_int,
+    pub device_id: ::std::os::raw::c_int,
+    pub n_threads: ::std::os::raw::c_int,
+    pub max_chunk_ms: i64,
+    pub merge_gap_ms: i64,
+    pub padding_ms: i64,
+    pub silero_threshold: f32,
+    pub silero_min_speech_ms: i64,
+    pub silero_min_silence_ms: i64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of transcribe_vad_params"][::std::mem::size_of::<transcribe_vad_params>() - 96usize];
+    ["Alignment of transcribe_vad_params"]
+        [::std::mem::align_of::<transcribe_vad_params>() - 8usize];
+    ["Offset of field: transcribe_vad_params::struct_size"]
+        [::std::mem::offset_of!(transcribe_vad_params, struct_size) - 0usize];
+    ["Offset of field: transcribe_vad_params::mode"]
+        [::std::mem::offset_of!(transcribe_vad_params, mode) - 8usize];
+    ["Offset of field: transcribe_vad_params::dll_path"]
+        [::std::mem::offset_of!(transcribe_vad_params, dll_path) - 16usize];
+    ["Offset of field: transcribe_vad_params::weight_path"]
+        [::std::mem::offset_of!(transcribe_vad_params, weight_path) - 24usize];
+    ["Offset of field: transcribe_vad_params::backend"]
+        [::std::mem::offset_of!(transcribe_vad_params, backend) - 32usize];
+    ["Offset of field: transcribe_vad_params::device_id"]
+        [::std::mem::offset_of!(transcribe_vad_params, device_id) - 36usize];
+    ["Offset of field: transcribe_vad_params::n_threads"]
+        [::std::mem::offset_of!(transcribe_vad_params, n_threads) - 40usize];
+    ["Offset of field: transcribe_vad_params::max_chunk_ms"]
+        [::std::mem::offset_of!(transcribe_vad_params, max_chunk_ms) - 48usize];
+    ["Offset of field: transcribe_vad_params::merge_gap_ms"]
+        [::std::mem::offset_of!(transcribe_vad_params, merge_gap_ms) - 56usize];
+    ["Offset of field: transcribe_vad_params::padding_ms"]
+        [::std::mem::offset_of!(transcribe_vad_params, padding_ms) - 64usize];
+    ["Offset of field: transcribe_vad_params::silero_threshold"]
+        [::std::mem::offset_of!(transcribe_vad_params, silero_threshold) - 72usize];
+    ["Offset of field: transcribe_vad_params::silero_min_speech_ms"]
+        [::std::mem::offset_of!(transcribe_vad_params, silero_min_speech_ms) - 80usize];
+    ["Offset of field: transcribe_vad_params::silero_min_silence_ms"]
+        [::std::mem::offset_of!(transcribe_vad_params, silero_min_silence_ms) - 88usize];
+};
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct transcribe_vad_segment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub confidence: f32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of transcribe_vad_segment"][::std::mem::size_of::<transcribe_vad_segment>() - 24usize];
+    ["Alignment of transcribe_vad_segment"]
+        [::std::mem::align_of::<transcribe_vad_segment>() - 8usize];
+    ["Offset of field: transcribe_vad_segment::start_ms"]
+        [::std::mem::offset_of!(transcribe_vad_segment, start_ms) - 0usize];
+    ["Offset of field: transcribe_vad_segment::end_ms"]
+        [::std::mem::offset_of!(transcribe_vad_segment, end_ms) - 8usize];
+    ["Offset of field: transcribe_vad_segment::confidence"]
+        [::std::mem::offset_of!(transcribe_vad_segment, confidence) - 16usize];
+};
+unsafe extern "C" {
+    pub fn transcribe_vad(
+        pcm: *const f32,
+        n_samples: ::std::os::raw::c_int,
+        sample_rate: ::std::os::raw::c_int,
+        vad_params: *const transcribe_vad_params,
+        out_segments: *mut *mut transcribe_vad_segment,
+        out_n_segments: *mut i64,
+    ) -> transcribe_status;
+}
+unsafe extern "C" {
+    pub fn transcribe_free_vad(segments: *mut transcribe_vad_segment);
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_run_params {
@@ -339,10 +428,11 @@ pub struct transcribe_run_params {
     pub keep_special_tags: bool,
     pub family: *const transcribe_ext,
     pub spec_k_drafts: i32,
+    pub vad: transcribe_vad_params,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of transcribe_run_params"][::std::mem::size_of::<transcribe_run_params>() - 72usize];
+    ["Size of transcribe_run_params"][::std::mem::size_of::<transcribe_run_params>() - 168usize];
     ["Alignment of transcribe_run_params"]
         [::std::mem::align_of::<transcribe_run_params>() - 8usize];
     ["Offset of field: transcribe_run_params::struct_size"]
@@ -367,6 +457,8 @@ const _: () = {
         [::std::mem::offset_of!(transcribe_run_params, family) - 56usize];
     ["Offset of field: transcribe_run_params::spec_k_drafts"]
         [::std::mem::offset_of!(transcribe_run_params, spec_k_drafts) - 64usize];
+    ["Offset of field: transcribe_run_params::vad"]
+        [::std::mem::offset_of!(transcribe_run_params, vad) - 72usize];
 };
 unsafe extern "C" {
     pub fn transcribe_run_params_init(params: *mut transcribe_run_params);
@@ -522,6 +614,22 @@ unsafe extern "C" {
     pub fn transcribe_set_abort_callback(
         session: *mut transcribe_session,
         cb: transcribe_abort_callback,
+        user_data: *mut ::std::os::raw::c_void,
+    );
+}
+pub type transcribe_progress_callback = ::std::option::Option<
+    unsafe extern "C" fn(
+        progress: f32,
+        stage: *const ::std::os::raw::c_char,
+        completed_units: i64,
+        total_units: i64,
+        user_data: *mut ::std::os::raw::c_void,
+    ) -> ::std::os::raw::c_int,
+>;
+unsafe extern "C" {
+    pub fn transcribe_set_progress_callback(
+        session: *mut transcribe_session,
+        cb: transcribe_progress_callback,
         user_data: *mut ::std::os::raw::c_void,
     );
 }

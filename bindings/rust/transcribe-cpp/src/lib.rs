@@ -51,10 +51,12 @@ mod error;
 mod family;
 mod logging;
 mod model;
+mod progress;
 mod result;
 mod session;
 mod streaming;
 mod types;
+mod vad;
 mod version;
 
 pub use backend::{
@@ -69,6 +71,7 @@ pub use family::{
 };
 pub use logging::{disable_logging, init_logging};
 pub use model::{Capabilities, Model, ModelOptions, SessionLimits, SessionOptions};
+pub use progress::{Progress, ProgressAction, ProgressCallback};
 pub use result::{Segment, SpeakerSegment, Timings, Token, Transcript, Word};
 pub use session::{RunOptions, Session, Stream};
 pub use streaming::{StreamOptions, StreamText, StreamUpdate};
@@ -76,6 +79,7 @@ pub use types::{
     AbiStruct, Backend, CommitPolicy, Diarize, ExtSlot, Feature, Itn, KvType, Pnc, StreamState,
     Task, TimestampKind,
 };
+pub use vad::{detect_speech, VadBackend, VadMode, VadOptions, VadSegment};
 pub use version::{
     abi_struct_align, abi_struct_size, compiled_version, header_hash, version, version_commit,
 };
