@@ -43,6 +43,8 @@ env:
   AMDGPU_TARGETS: "gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
   # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
   # Keep in lockstep with cuda-windows.yml / python-wheels.yml / rust-ci.yml.
+  # Same version used on both Linux (tarball) and Windows (installer).
+  VK_VERSION: "1.4.350.0"
   VULKAN_VERSION: "1.4.350.0"
   OSS_BUCKET: "miaosoft-internal"
   OSS_ENDPOINT: "oss-cn-shanghai.aliyuncs.com"
@@ -77,15 +79,15 @@ jobs:
             container: intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04
             cmake_extra: '-DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL'
             artifact_suffix: linux-sycl-cpu
-          # Vulkan + CPU on a stock Ubuntu image (no vendor toolchain). Unlike
-          # the GPU-vendor lanes, this needs the Vulkan loader + glslc shader
-          # compiler on the build host: libvulkan-dev, glslc (glslang), and
-          # spirv-headers. Hosted runners have no Vulkan-capable GPU, so this
-          # only proves configure/compile/link — the runtime degradation
-          # contract is covered by native-ci.yml's provider-dl-vulkan lane.
+          # Vulkan + CPU on a stock Ubuntu image (no vendor toolchain).
+          # libvulkan-dev provides the loader/headers; the shader compiler
+          # (glslc) comes from the LunarG SDK tarball installed in a dedicated
+          # step below. Hosted runners have no Vulkan-capable GPU, so this only
+          # proves configure/compile/link — the runtime degradation contract
+          # is covered by native-ci.yml's provider-dl-vulkan lane.
           - name: Vulkan-CPU
             container: ubuntu:22.04
-            apt_extra: 'libvulkan-dev glslc spirv-headers'
+            install_vulkan: 'true'
             cmake_extra: '-DTRANSCRIBE_VULKAN=ON'
             artifact_suffix: linux-vulkan-cpu
 
@@ -100,7 +102,24 @@ jobs:
           # from inside GitHub Actions containers (transient connection drops).
           # patchelf: used in Collect artifacts to flatten the versioned
           # libtranscribe.so symlink chain into a single file (see there).
-          apt-get -o Acquire::Retries=5 install -y cmake git build-essential patchelf ${{ matrix.config.apt_extra }}
+          DEPS="cmake git build-essential patchelf"
+          # Vulkan backend needs the loader + headers; the compiler/shader
+          # toolchain comes from the Vulkan SDK tarball below.
+          if [ "${{ matrix.config.install_vulkan }}" = "true" ]; then
+            DEPS="$DEPS libvulkan-dev wget tar"
+          fi
+          apt-get -o Acquire::Retries=5 install -y $DEPS
+
+      - name: Install Vulkan SDK (Linux Vulkan job only)
+        if: matrix.config.install_vulkan == 'true'
+        run: |
+          # Pull the portable Vulkan SDK tarball (no apt repo needed, and
+          # Ubuntu's glslc package is not generally available — the SDK
+          # ships its own glslc).
+          wget -q "https://sdk.lunarg.com/sdk/download/${VK_VERSION}/linux/vulkansdk-linux-x86_64-${VK_VERSION}.tar.xz"
+          tar xf "vulkansdk-linux-x86_64-${VK_VERSION}.tar.xz"
+          echo "VULKAN_SDK=$PWD/${VK_VERSION}/x86_64" >> $GITHUB_ENV
+          echo "$PWD/${VK_VERSION}/x86_64/bin" >> $GITHUB_PATH
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -240,19 +259,18 @@ jobs:
           cuda: '12.9.0'
           method: 'network'
 
-      # ── Vulkan: LunarG SDK (glslc for the ggml-vulkan module) ─────────────
-      # Mirrors cuda-windows.yml / python-wheels.yml's wheel-windows lane.
-      # Only the SDK's glslc + headers are needed at build time; the runtime
-      # Vulkan loader (vulkan-1.dll) is supplied by the host/driver, never
-      # vendored — see the manifest's libraries list (transcribe only).
-      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
+      # ── Vulkan: LunarG SDK (provides glslang/glslc for shader compilation) ──
+      # Mirrors audio.cpp's capi-build Windows Vulkan lane (uses the same
+      # community action; thumbprint in lockstep with cuda-windows.yml /
+      # python-wheels.yml / rust-ci.yml). Only the SDK's glslc + headers are
+      # needed at build time; the runtime Vulkan loader (vulkan-1.dll) is
+      # supplied by the host/driver, never vendored.
+      - name: Setup Vulkan SDK
         if: matrix.config.setup == 'vulkan'
-        shell: pwsh
-        run: |
-          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
-          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: ${{ env.VULKAN_VERSION }}
+          cache: true
 
       # ── ROCm/HIP: real AMD HIP SDK installer (llama.cpp pattern) ──────────
       # Hosted runners have no AMD GPU, so this only proves configure/compile.
