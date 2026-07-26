@@ -129,10 +129,11 @@ option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 # Compile VAD glue that dynamically loads audiocpp.dll at runtime. The VAD
 # field in transcribe_run_params always exists (parsed as OFF when off); this
 # switch controls whether the audiocpp-backed implementation is compiled in.
-# Off by default: the library has zero audiocpp dependency. When on, the
-# transcribe_vad / transcribe_free_vad symbols exist and run_params.vad.mode
-# is honored; the user must still supply audiocpp.dll at runtime.
-option(TRANSCRIBE_VAD_VIA_AUDIOCPP "Compile VAD glue (dynamic audiocpp.dll load)" OFF)
+# On by default so a clean reconfigure (e.g. `rm CMakeCache.txt`) does not
+# silently drop VAD. The audiocpp-backed glue is loaded dynamically so there
+# is still zero compile-time dependency on audiocpp; the user must still
+# supply audiocpp.dll at runtime for the symbols to actually resolve.
+option(TRANSCRIBE_VAD_VIA_AUDIOCPP "Compile VAD glue (dynamic audiocpp.dll load)" ON)
 
 # Library link mode and wheel-hygiene switches.
 #

@@ -18,7 +18,10 @@
     .\scripts\build_windows.ps1 -Preset windows-cuda-release -ConfigureOnly
 
 .PARAMETER Preset
-  windows-cpu-release   Release, CPU backend, native CPU + llamafile.
+  windows-cpu-release   Release, CPU backend, native CPU + llamafile, single
+                       self-contained transcribe.dll (SHARED_EMBED=ON, ggml
+                       statically linked inside — the posture C ABI consumers
+                       downstream of the publish-to-OSS pipeline expect).
   windows-cuda-release  Release, CUDA + CUDA graphs + VAD glue + native CPU + llamafile.
   windows-cuda-debug    Debug, CUDA + CUDA graphs + VAD glue, tests on, /O2 /Zi.
 
@@ -44,6 +47,12 @@
 .PARAMETER Ccache
   Enable ccache (auto-detected on PATH; pass this to force a clear message if
   missing). Unchanged sources skip recompilation on clean rebuilds.
+
+.PARAMETER SharedEmbed
+  "ON" / "OFF" — override TRANSCRIBE_SHARED_EMBED. With ON, the libtranscribe
+  target is a single self-contained .dll/.so with ggml statically linked inside
+  (the "prebuilt consumer" posture the capi CI matrix uses). CPU preset
+  defaults to ON; CUDA presets default to OFF (developer builds).
 
 .PARAMETER Jobs
   Parallel build jobs. Default: max(2, ProcessorCount).
@@ -71,6 +80,8 @@ param(
     [string]$NativeCpu = $null,
     [ValidateSet("ON", "OFF")]
     [string]$Llamafile = $null,
+    [ValidateSet("ON", "OFF")]
+    [string]$SharedEmbed = $null,
     [switch]$Ccache,
     [switch]$RealModelTests,
     [string]$VsInstall = ""
@@ -324,6 +335,7 @@ function Get-PresetSettings {
                 Native = "ON"; Llamafile = "ON"
                 EnableCuda = "OFF"; EnableCudaGraphs = "OFF"
                 EnableVadViaAudiocpp = "OFF"
+                SharedEmbed = "ON"  # single self-contained transcribe.dll; matches docstring "C ABI shared library for downstream consumers"
                 CFlagsDebug = ""; CxxFlagsDebug = ""
             }
         }
@@ -334,6 +346,7 @@ function Get-PresetSettings {
                 Native = "ON"; Llamafile = "ON"
                 EnableCuda = "ON"; EnableCudaGraphs = "ON"
                 EnableVadViaAudiocpp = "ON"
+                SharedEmbed = "OFF"  # dev build; pass -SharedEmbed ON to match capi CI posture
                 CFlagsDebug = ""; CxxFlagsDebug = ""
             }
         }
@@ -344,6 +357,7 @@ function Get-PresetSettings {
                 Native = "ON"; Llamafile = "ON"
                 EnableCuda = "ON"; EnableCudaGraphs = "ON"
                 EnableVadViaAudiocpp = "ON"
+                SharedEmbed = "OFF"  # dev build
                 CFlagsDebug = "/O2 /Zi"; CxxFlagsDebug = "/O2 /Zi"
             }
         }
@@ -360,6 +374,7 @@ $cpuArchSettings = Get-CpuArchSettings $CpuArch
 if ($null -ne $cpuArchSettings.Native) { $settings.Native = $cpuArchSettings.Native }
 if (-not [string]::IsNullOrEmpty($NativeCpu)) { $settings.Native = $NativeCpu }
 if (-not [string]::IsNullOrEmpty($Llamafile)) { $settings.Llamafile = $Llamafile }
+if (-not [string]::IsNullOrEmpty($SharedEmbed)) { $settings.SharedEmbed = $SharedEmbed }
 if ($RealModelTests) {
     # Real-model tests are nested under TRANSCRIBE_BUILD_TESTS in tests/CMakeLists.txt,
     # so turning them on also requires the outer tests gate.
@@ -444,7 +459,8 @@ $configureArgs = @(
     "-DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=$($settings.BuildRealModelTests)",
     "-DTRANSCRIBE_BUILD_EXAMPLES=$($settings.BuildExamples)",
     "-DTRANSCRIBE_BUILD_TOOLS=$($settings.BuildTools)",
-    "-DTRANSCRIBE_VAD_VIA_AUDIOCPP=$($settings.EnableVadViaAudiocpp)"
+    "-DTRANSCRIBE_VAD_VIA_AUDIOCPP=$($settings.EnableVadViaAudiocpp)",
+    "-DTRANSCRIBE_SHARED_EMBED=$($settings.SharedEmbed)"
 )
 $configureArgs += $cpuArchSettings.CMakeArgs
 if ($settings.CFlagsDebug -ne "") { $configureArgs += "-DCMAKE_C_FLAGS_DEBUG=$($settings.CFlagsDebug)" }
