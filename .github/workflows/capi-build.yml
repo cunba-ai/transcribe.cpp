@@ -73,7 +73,7 @@ jobs:
             artifact_suffix: linux-cuda-cpu
           - name: ROCm-CPU
             container: rocm/dev-ubuntu-22.04:6.4-complete
-            cmake_extra: '-DGGML_HIP=ON -DGPU_TARGETS="gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201" -DCMAKE_PREFIX_PATH=/opt/rocm'
+            cmake_extra: '-DTRANSCRIBE_HIP=ON -DGPU_TARGETS="gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201" -DCMAKE_PREFIX_PATH=/opt/rocm'
             artifact_suffix: linux-rocm-cpu
           - name: SYCL-CPU
             container: intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04
@@ -408,7 +408,7 @@ jobs:
             -DTRANSCRIBE_BUILD_TESTS=OFF `
             -DTRANSCRIBE_BUILD_EXAMPLES=OFF `
             -DTRANSCRIBE_BUILD_TOOLS=OFF `
-            -DGGML_HIP=ON `
+            -DTRANSCRIBE_HIP=ON `
             -DGPU_TARGETS="${{ env.AMDGPU_TARGETS }}" `
             -DCMAKE_PREFIX_PATH="$hipPath"
 
