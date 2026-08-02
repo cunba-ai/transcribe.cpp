@@ -75,6 +75,16 @@ shared = []
 # runtime by transcribe_init_backends(). Requires a shared library, so it implies
 # `shared`. See notes/rust-dynamic-backends-plan.md.
 dynamic-backends = ["shared"]
+# `dynload` is the runtime-dlopen posture: no native build and no link at
+# compile time (build.rs is a no-op). The library is resolved at runtime by
+# src/dynload.rs; every C entry point in transcribe_dyn.rs is a trampoline
+# forwarding through the loaded library. Consumers get graceful degradation
+# (missing library -> a load error instead of a process that fails to start)
+# and need no import lib / toolkit at build time.
+dynload = ["dep:libloading"]
+
+[dependencies]
+libloading = { version = "0.8", optional = true }
 
 [build-dependencies]
 cmake = "0.1"

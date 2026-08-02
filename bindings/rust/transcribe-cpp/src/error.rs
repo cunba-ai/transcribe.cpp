@@ -70,6 +70,12 @@ pub enum Error {
     /// was generated against (the pre-1.0 version lock). Raised on first use.
     #[error("native library version mismatch: {0}")]
     VersionMismatch(String),
+    /// The native library could not be loaded at runtime (feature `dynload`):
+    /// missing, not findable by the search path, or missing a symbol the
+    /// bindings expect (0.x ABI drift).
+    #[cfg(feature = "dynload")]
+    #[error("failed to load transcribe library: {0}")]
+    DynamicLoad(String),
     /// A caller-supplied string contained an interior NUL byte.
     #[error("string contains an interior NUL byte: {0}")]
     Nul(#[from] std::ffi::NulError),

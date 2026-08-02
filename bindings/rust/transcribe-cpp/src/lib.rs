@@ -84,6 +84,10 @@ pub use vad::{detect_speech, VadBackend, VadMode, VadOptions, VadSegment};
 pub use version::{
     abi_struct_align, abi_struct_size, compiled_version, header_hash, version, version_commit,
 };
+#[cfg(feature = "dynload")]
+mod dynload;
+#[cfg(feature = "dynload")]
+pub use dynload::{init_dynamic, is_dynamic_loaded};
 
 /// Convenience: load a model, transcribe one PCM buffer, and return the result.
 ///

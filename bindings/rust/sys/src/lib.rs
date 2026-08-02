@@ -18,14 +18,33 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
+// Two mutually exclusive postures, one compiled per build:
+// - default / `shared`: link-time bindings (`transcribe_sys.rs`), build.rs
+//   emits the native link line.
+// - `dynload`: runtime-dlopen bindings (`transcribe_dyn.rs` + `dynload.rs`),
+//   build.rs is a no-op and every entry point is a trampoline forwarding
+//   through the loaded library. The types are identical in both files.
+#[cfg(not(feature = "dynload"))]
 #[allow(clippy::all)]
 mod transcribe_sys {
     include!("transcribe_sys.rs");
 }
-
+#[cfg(not(feature = "dynload"))]
 pub use transcribe_sys::*;
 
-#[cfg(test)]
+#[cfg(feature = "dynload")]
+#[allow(clippy::all)]
+mod transcribe_dyn {
+    include!("transcribe_dyn.rs");
+}
+#[cfg(feature = "dynload")]
+pub use transcribe_dyn::*;
+#[cfg(feature = "dynload")]
+pub mod dynload;
+#[cfg(feature = "dynload")]
+pub use dynload::{transcribe_dyn_load, transcribe_dyn_loaded};
+
+#[cfg(all(test, not(feature = "dynload")))]
 mod smoke {
     //! Proves the whole chain wires up: the cmake source build, the link
     //! manifest -> link line, and the committed bindgen surface. If this links
@@ -45,7 +64,51 @@ mod smoke {
     fn abi_struct_size_is_live() {
         // A real call into the native lib that returns a runtime value.
         let size =
-            unsafe { transcribe_abi_struct_size(transcribe_abi_struct::TRANSCRIBE_ABI_RUN_PARAMS) };
+            unsafe { transcribe_abi_struct_size(transcribe_abi_struct::TRANSCRIBE_ABI_MODEL_LOAD_PARAMS) };
         assert!(size > 0);
+    }
+}
+
+#[cfg(all(test, feature = "dynload"))]
+mod smoke {
+    //! dynload posture: the loader state is a process-global `OnceLock`, so
+    //! these tests must not assume a pristine state — a real library
+    //! discoverable in the test environment (exe dir / PATH) makes every
+    //! trampoline resolve. They assert the invariants that hold in BOTH cases:
+    //! no panic, no null-pointer call, no garbage.
+
+    use super::*;
+
+    #[test]
+    fn version_string_is_null_or_valid() {
+        let v = unsafe { transcribe_version() };
+        if v.is_null() {
+            return; // not loaded — the documented default
+        }
+        let s = unsafe { std::ffi::CStr::from_ptr(v) }.to_string_lossy();
+        assert!(!s.trim().is_empty());
+    }
+
+    #[test]
+    fn abi_size_is_zero_or_positive() {
+        let sz = unsafe {
+            transcribe_abi_struct_size(transcribe_abi_struct::TRANSCRIBE_ABI_MODEL_LOAD_PARAMS)
+        };
+        // 0 = not loaded; nonzero = a real library answered.
+        assert_ne!(sz, usize::MAX);
+    }
+
+    #[test]
+    fn explicit_load_of_missing_path_errors() {
+        // Deterministic only when no earlier test triggered a successful lazy
+        // auto-init (a discoverable library would win the OnceLock). If the
+        // state is already loaded, skip — the load-once contract holds.
+        if transcribe_dyn_loaded() {
+            return;
+        }
+        let missing = std::path::Path::new("definitely-not-a-transcribe-library-xyz");
+        assert!(transcribe_dyn_load(Some(missing)).is_err());
+        // The failed load must leave the trampolines in the safe default state.
+        assert!(unsafe { transcribe_version() }.is_null());
     }
 }

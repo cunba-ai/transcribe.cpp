@@ -76,6 +76,15 @@ fn split_cmake_args(s: &str) -> Vec<String> {
 }
 
 fn main() {
+    // ── DYNLOAD 短路:feature `dynload` 下不做任何原生构建与链接 ──
+    //
+    // 调用方在运行时 dlopen 原生库(见 src/dynload.rs + transcribe_dyn.rs 的
+    // trampoline)。这里不发射任何 link 指令、不跑 cmake,`TRANSCRIBE_PREBUILT_PREFIX`
+    // 也完全不需要 —— 编译期零依赖正是此模式的意义。
+    if env::var_os("CARGO_FEATURE_DYNLOAD").is_some() {
+        return;
+    }
+
     // ── PREBUILT 短路:用 CI/本地预编译的 install tree,跳过 cmake 源码编译 ──
     //
     // 设 `TRANSCRIBE_PREBUILT_PREFIX=<install-prefix>` 后,build.rs 直接读该

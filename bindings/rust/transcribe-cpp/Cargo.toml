@@ -34,6 +34,11 @@ openmp = ["transcribe-cpp-sys/openmp"]
 # via the -sys feature). See notes/rust-dynamic-backends-plan.md.
 shared = ["transcribe-cpp-sys/shared"]
 dynamic-backends = ["shared", "transcribe-cpp-sys/dynamic-backends"]
+# `dynload` is the runtime-dlopen posture: the native library is loaded at
+# runtime via init_dynamic() — no import lib or toolkit needed at build time,
+# and a missing library degrades to a clear load error instead of a process
+# that fails to start. The safe API surface is identical in every posture.
+dynload = ["transcribe-cpp-sys/dynload"]
 
 [dependencies]
 # default-features = false so the safe crate's own features are the ONLY control
