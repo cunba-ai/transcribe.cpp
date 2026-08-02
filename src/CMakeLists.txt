@@ -348,7 +348,7 @@ endif()
 # (no describe-parse fallback needed); the string fields carry the full
 # provenance (version | commit | branch | date) for tools that read strings.
 # ──────────────────────────────────────────────────────────────────────────
-if(WIN32 AND (TRANSCRIBE_BUILD_SHARED OR TRANSCRIBE_SHARED_EMBED))
+if(WIN32 AND MSVC AND (TRANSCRIBE_BUILD_SHARED OR TRANSCRIBE_SHARED_EMBED))
     set(TRANSCRIBE_RC_FILEVERSION
         "${TRANSCRIBE_VERSION_MAJOR},${TRANSCRIBE_VERSION_MINOR},${TRANSCRIBE_VERSION_PATCH},0")
     set(TRANSCRIBE_RC_FILE "${CMAKE_BINARY_DIR}/generated/transcribe-version.rc")
