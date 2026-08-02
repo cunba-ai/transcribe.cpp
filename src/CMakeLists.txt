@@ -165,6 +165,10 @@ target_include_directories(transcribe
         # alongside the .cpp files. PRIVATE so they never escape into the
         # public include path.
         ${CMAKE_CURRENT_SOURCE_DIR}
+        # Generated build-provenance header (transcribe-build-info.h), produced
+        # by the top-level CMakeLists.txt. PRIVATE: it is an internal detail of
+        # the build-id string in transcribe.cpp, not part of the public API.
+        ${CMAKE_BINARY_DIR}/generated
 )
 
 target_compile_definitions(transcribe
@@ -332,6 +336,27 @@ if(WIN32)
     # (used by the mel frontends and Whisper's bin loader). MSVC and MinGW
     # both honor it — MinGW's strict-C++17 mode hides M_PI the same way.
     target_compile_definitions(transcribe PRIVATE _USE_MATH_DEFINES)
+endif()
+
+# ──────────────────────────────────────────────────────────────────────────
+# Embed a Windows VS_VERSION_INFO resource so the build version is viewable
+# via file Properties > Details (right-click transcribe.dll) WITHOUT loading
+# the DLL. Only the SHARED library gets it: a static archive has no
+# file-level Properties view, and the resource would be dead weight there.
+# Numeric FILEVERSION derives directly from the integer
+# TRANSCRIBE_VERSION_MAJOR/MINOR/PATCH parsed in the top-level CMakeLists.txt
+# (no describe-parse fallback needed); the string fields carry the full
+# provenance (version | commit | branch | date) for tools that read strings.
+# ──────────────────────────────────────────────────────────────────────────
+if(WIN32 AND (TRANSCRIBE_BUILD_SHARED OR TRANSCRIBE_SHARED_EMBED))
+    set(TRANSCRIBE_RC_FILEVERSION
+        "${TRANSCRIBE_VERSION_MAJOR},${TRANSCRIBE_VERSION_MINOR},${TRANSCRIBE_VERSION_PATCH},0")
+    set(TRANSCRIBE_RC_FILE "${CMAKE_BINARY_DIR}/generated/transcribe-version.rc")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/cmake/transcribe-version.rc.in"
+        "${TRANSCRIBE_RC_FILE}"
+        @ONLY)
+    target_sources(transcribe PRIVATE "${TRANSCRIBE_RC_FILE}")
 endif()
 
 transcribe_apply_warnings(transcribe)

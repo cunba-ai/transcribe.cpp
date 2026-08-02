@@ -28,11 +28,19 @@ project(transcribe
     VERSION ${TRANSCRIBE_VERSION_MAJOR}.${TRANSCRIBE_VERSION_MINOR}.${TRANSCRIBE_VERSION_PATCH}
     LANGUAGES C CXX)
 
-# Short git commit for transcribe_version_commit(), captured at configure time.
-# Best-effort: source tarballs and non-git trees fall back to "unknown". This is
-# a configure-time snapshot (same posture as ggml's GGML_COMMIT); reconfigure to
-# refresh it.
+# Build provenance captured at configure time: short git commit (for
+# transcribe_version_commit()), the git branch, and an ISO-8601 UTC build
+# timestamp. Best-effort: source tarballs and non-git trees fall back to
+# "unknown". This is a configure-time snapshot (same posture as ggml's
+# GGML_COMMIT); reconfigure to refresh it. The values feed three outlets that
+# surface the build version WITHOUT loading the DLL:
+#   1. The Windows VS_VERSION_INFO resource (file Properties > Details).
+#   2. A strong-symbol build-id string in src/transcribe.cpp (strings/readelf).
+#   3. transcribe_version() / transcribe_version_commit() (runtime API).
+# All three derive from cmake/transcribe-build-info.h.in below, so they stay
+# in sync with the library version parsed from include/transcribe.h.
 set(TRANSCRIBE_BUILD_COMMIT "unknown")
+set(TRANSCRIBE_BUILD_BRANCH "unknown")
 find_package(Git QUIET)
 if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     execute_process(
@@ -43,8 +51,32 @@ if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     if(_transcribe_git_sha)
         set(TRANSCRIBE_BUILD_COMMIT "${_transcribe_git_sha}")
     endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --abbrev-ref HEAD
+        OUTPUT_VARIABLE _transcribe_git_branch
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(_transcribe_git_branch)
+        set(TRANSCRIBE_BUILD_BRANCH "${_transcribe_git_branch}")
+    endif()
 endif()
-message(STATUS "transcribe version: ${PROJECT_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT})")
+string(TIMESTAMP TRANSCRIBE_BUILD_DATE "%Y-%m-%dT%H:%M:%SZ" UTC)
+
+# Full version string ("MAJOR.MINOR.PATCH") composed from the parsed integer
+# vars so the generated header and .rc carry the same value transcribe_version()
+# reports, without re-stringizing the TRANSCRIBE_VERSION macro on the C++ side.
+set(TRANSCRIBE_VERSION "${TRANSCRIBE_VERSION_MAJOR}.${TRANSCRIBE_VERSION_MINOR}.${TRANSCRIBE_VERSION_PATCH}")
+
+# Generated header carrying the captured provenance. Consumed by the build-id
+# string in src/transcribe.cpp. Generated into the build tree (not the source
+# tree) so it never appears in git status; src/CMakeLists.txt adds the dir to
+# the transcribe target's PRIVATE include path.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/transcribe-build-info.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/transcribe-build-info.h"
+    @ONLY)
+
+message(STATUS "transcribe version: ${TRANSCRIBE_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT}, branch ${TRANSCRIBE_BUILD_BRANCH}, built ${TRANSCRIBE_BUILD_DATE})")
 
 # -----------------------------------------------------------------------------
 # Standards

@@ -183,6 +183,30 @@ extern "C" const char * transcribe_version_commit(void) {
     return TRANSCRIBE_COMMIT;
 }
 
+// Build-ID string — a single contiguous ASCII run embedded verbatim into the
+// binary so the full build provenance is recoverable from the file ALONE, via
+// `strings transcribe.dll | grep transcribe-build-id` (or readelf/grep on ELF
+// builds), without loading or calling the library. Kept distinct from the
+// runtime accessors above: those return the bare version/commit (and the
+// compiler may split/merge their string literals), whereas this one constant
+// is laid down whole in .rdata/.rodata and survives as one grep-able line.
+//
+// Format:  "transcribe-build-id: <version> <commit> <branch> <date>"
+// where <version> mirrors transcribe_version() and the rest come from the
+// configure-time git capture (cmake/transcribe-build-info.h.in).
+//
+// NOTE: intentionally not exported (anonymous namespace → hidden visibility).
+// It is a metadata marker, not part of the C ABI. The leading '\n' and the
+// volatile read below defeat dead-stripping so the linker keeps the literal
+// even though no public symbol references it.
+#include "transcribe-build-info.h"
+namespace {
+const char kTranscribeBuildId[] =
+    "\ntranscribe-build-id: " TRANSCRIBE_BUILD_VERSION " "
+    TRANSCRIBE_BUILD_COMMIT " " TRANSCRIBE_BUILD_BRANCH " " TRANSCRIBE_BUILD_DATE "\n";
+[[maybe_unused]] volatile char transcribe_build_id_anchor = kTranscribeBuildId[0];
+}  // namespace
+
 // Raw enum reads at the public ABI boundary
 //
 // C callers can store ANY int in an enum-typed ABI field; in C++ loading an
