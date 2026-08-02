@@ -135,12 +135,12 @@ fn load(explicit: Option<&Path>) -> Result<Arc<NativeLibrary>, String> {
         })?;
         // Detach the lifetime: the Arc<Library> stays alive in STATE, and the
         // raw pointer is only read through atomics afterwards. (Windows'
-        // os::Symbol exposes `as_raw_ptr` directly; the cross-platform one
-        // wraps it in `try_as_raw_ptr`.)
+        // os::Symbol exposes the safe `as_raw_ptr`; the cross-platform one
+        // wraps the same call in the unsafe `try_as_raw_ptr`.)
         #[cfg(windows)]
         let ptr = sym.as_raw_ptr();
         #[cfg(not(windows))]
-        let ptr = sym.try_as_raw_ptr().unwrap_or(std::ptr::null_mut());
+        let ptr = unsafe { sym.try_as_raw_ptr() }.unwrap_or(std::ptr::null_mut());
         slots.push(AtomicPtr::new(ptr as *mut ()));
     }
     let _ = SLOTS.set(slots.into_boxed_slice());
