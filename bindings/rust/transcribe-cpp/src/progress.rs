@@ -92,14 +92,16 @@ impl ProgressCallback {
     }
 }
 
-/// The C progress trampoline. `user_data` is a `*const Arc<Mutex<Box<ProgressFn>>>`
-/// kept alive on the session for the duration of any run. Invoked on the run
-/// thread between chunks.
+/// The C progress trampoline. `user_data` is the `*const Mutex<Box<ProgressFn>>`
+/// pointee of the `Arc` the session retains (installed via `Arc::as_ptr`, which
+/// yields a pointer to the Arc's *inner* data, not to the Arc handle). Invoked
+/// on the run thread between chunks.
 ///
 /// # SAFETY contract
 ///
-/// `user_data` must point at a live `Arc<Mutex<Box<ProgressFn>>>` that the
-/// session retains until the callback is cleared. The session enforces this.
+/// `user_data` must point at a live `Mutex<Box<ProgressFn>>` owned by an
+/// `Arc` the session retains until the callback is cleared. The session
+/// enforces this by storing the `Arc` clone in `Session::progress`.
 pub(crate) extern "C" fn progress_trampoline(
     progress: f32,
     stage: *const c_char,
@@ -110,10 +112,13 @@ pub(crate) extern "C" fn progress_trampoline(
     if user_data.is_null() {
         return 0;
     }
-    // SAFETY: `user_data` is the `*const Arc<Mutex<Box<ProgressFn>>>` the
-    // session installed and keeps alive (via a retained clone) for as long as
-    // the callback is set.
-    let arc = unsafe { &*(user_data as *const Arc<Mutex<Box<ProgressFn>>>) };
+    // SAFETY: `user_data` is the `*const Mutex<Box<ProgressFn>>` produced by
+    // `Arc::as_ptr` in `Session::set_progress_callback`. The session holds the
+    // owning `Arc` clone for as long as the callback is set, keeping this
+    // pointee live. `Arc::as_ptr` returns a pointer to the inner data (the
+    // `Mutex`), NOT to the `Arc` handle — casting to `*const Mutex<...>` (not
+    // `*const Arc<...>`) matches the install site.
+    let mutex = unsafe { &*(user_data as *const Mutex<Box<ProgressFn>>) };
     let stage = if stage.is_null() {
         String::new()
     } else {
@@ -127,7 +132,7 @@ pub(crate) extern "C" fn progress_trampoline(
         completed: completed_units,
         total: total_units,
     };
-    let action = match arc.lock() {
+    let action = match mutex.lock() {
         Ok(guard) => (guard)(snapshot),
         // A poisoned mutex means a prior callback panicked; treat as cancel so
         // the run stops rather than spinning on a broken callback.
