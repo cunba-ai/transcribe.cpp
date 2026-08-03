@@ -324,9 +324,14 @@ TRANSCRIBE_API const char * transcribe_status_string(int status);
  * Both return borrowed pointers into static storage: never free them, and
  * treat them as valid for the life of the process.
  */
-/* "MAJOR.MINOR.PATCH", e.g. "0.1.0". Equals the TRANSCRIBE_VERSION macro the
- * caller compiled against; a mismatch means the header and the linked library
- * disagree. */
+/* Full build provenance in one string:
+ *   "MAJOR.MINOR.PATCH <commit> <branch> <build-time> <backend>"
+ * e.g. "0.2.0 8648bbb main 2026-08-03T11:44:53Z cuda". The leading release
+ * segment equals the TRANSCRIBE_VERSION macro the caller compiled against; a
+ * mismatch means the header and the linked library disagree. <commit> is the
+ * short git SHA the library was built from ("unknown" in a non-git build),
+ * <branch> the git branch, <build-time> the ISO-8601 UTC configure timestamp,
+ * and <backend> the primary build backend tag (cuda/rocm/sycl/vulkan/cpu). */
 TRANSCRIBE_API const char * transcribe_version(void);
 /* Short git commit the library was built from, or "unknown" when the build
  * tree carried no git metadata (e.g. an unpacked source tarball). */

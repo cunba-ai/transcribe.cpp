@@ -97,13 +97,16 @@ static void test_status_string(void) {
 }
 
 static void test_version(void) {
-    /* transcribe_version() returns a non-empty static string that equals the
-     * stringized MAJOR.MINOR.PATCH macros the caller compiled against. This is
-     * the exact-match contract the Python provider version gate relies on. */
+    /* transcribe_version() returns "MAJOR.MINOR.PATCH <commit> <branch>
+     * <build-time> <backend>"; the leading release segment equals the
+     * stringized MAJOR.MINOR.PATCH macros the caller compiled against. This
+     * is the prefix-match contract the Python provider version gate relies
+     * on (it parses the dotted-numeric head). */
     const char * v = transcribe_version();
     CHECK(v != NULL);
     CHECK(v[0] != '\0');
-    CHECK(strcmp(v, TRANSCRIBE_VERSION) == 0);
+    CHECK(strncmp(v, TRANSCRIBE_VERSION, strlen(TRANSCRIBE_VERSION)) == 0);
+    CHECK(v[strlen(TRANSCRIBE_VERSION)] == ' ');
 
     /* The numeric form stays consistent with the components. */
     CHECK(TRANSCRIBE_VERSION_NUMBER ==

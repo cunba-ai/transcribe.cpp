@@ -21,6 +21,7 @@
 #include "transcribe-abi.h"
 #include "transcribe-arch.h"
 #include "transcribe-backend.h"
+#include "transcribe-build-info.h"  // configure-time provenance for transcribe_version()
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-model.h"
@@ -175,8 +176,17 @@ extern "C" const char * transcribe_status_string(int status) {
 #    define TRANSCRIBE_COMMIT "unknown"
 #endif
 
+// transcribe_version() returns the full build provenance in one call:
+//   "MAJOR.MINOR.PATCH <commit> <branch> <build-time> <backend>"
+// e.g. "0.2.0 8648bbb main 2026-08-03T11:44:53Z cuda". The leading release
+// segment equals the TRANSCRIBE_VERSION macro from <transcribe.h> (both
+// derive from the same MAJOR.MINOR.PATCH), so callers that parse the
+// dotted-numeric prefix keep working; the rest comes from the configure-time
+// git capture in transcribe-build-info.h. transcribe_version_commit()
+// retains the bare short SHA.
 extern "C" const char * transcribe_version(void) {
-    return TRANSCRIBE_VERSION;
+    return TRANSCRIBE_BUILD_VERSION " " TRANSCRIBE_BUILD_COMMIT " " TRANSCRIBE_BUILD_BRANCH " " TRANSCRIBE_BUILD_DATE
+                                    " " TRANSCRIBE_BUILD_BACKEND;
 }
 
 extern "C" const char * transcribe_version_commit(void) {
@@ -187,9 +197,9 @@ extern "C" const char * transcribe_version_commit(void) {
 // binary so the full build provenance is recoverable from the file ALONE, via
 // `strings transcribe.dll | grep transcribe-build-id` (or readelf/grep on ELF
 // builds), without loading or calling the library. Kept distinct from the
-// runtime accessors above: those return the bare version/commit (and the
-// compiler may split/merge their string literals), whereas this one constant
-// is laid down whole in .rdata/.rodata and survives as one grep-able line.
+// runtime accessors above: they return composed literals (and the compiler
+// may split/merge them), whereas this one constant is laid down whole in
+// .rdata/.rodata and survives as one grep-able line.
 //
 // Format:  "transcribe-build-id: <version> <commit> <branch> <date> <backend>"
 // where <version> mirrors transcribe_version() and the rest come from the
@@ -207,7 +217,6 @@ extern "C" const char * transcribe_version_commit(void) {
 // (transcribe_build_id) so the linker keeps it. The array itself is NOT part
 // of the C ABI; the exported accessor roots it, and the literal stays grep-
 // able via `strings <lib> | grep transcribe-build-id`.
-#include "transcribe-build-info.h"
 #if defined(__GNUC__)
 __attribute__((used))
 #endif

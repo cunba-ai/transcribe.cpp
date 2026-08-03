@@ -57,7 +57,11 @@ mod smoke {
         let raw = unsafe { transcribe_version() };
         assert!(!raw.is_null());
         let version = unsafe { CStr::from_ptr(raw) }.to_str().unwrap();
-        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        // The native lib returns "MAJOR.MINOR.PATCH <commit> <branch>
+        // <build-time> <backend>"; the leading segment must match the crate.
+        assert!(version.starts_with(env!("CARGO_PKG_VERSION")),
+                "native version {version:?} does not start with crate version {:?}",
+                env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
