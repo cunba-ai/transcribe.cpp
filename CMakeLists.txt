@@ -96,10 +96,10 @@ endif()
 # provenance instead of "unknown". GITHUB_SHA is the full 40-char commit; trim
 # it to the short form so it matches the `git rev-parse --short HEAD` shape
 # captured above.
-if(NOT TRANSCRIBE_BUILD_COMMIT AND DEFINED ENV{GITHUB_SHA})
+if(TRANSCRIBE_BUILD_COMMIT STREQUAL "unknown" AND DEFINED ENV{GITHUB_SHA})
     string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 TRANSCRIBE_BUILD_COMMIT)
 endif()
-if(NOT TRANSCRIBE_BUILD_BRANCH AND DEFINED ENV{GITHUB_REF_NAME})
+if(TRANSCRIBE_BUILD_BRANCH STREQUAL "unknown" AND DEFINED ENV{GITHUB_REF_NAME})
     set(TRANSCRIBE_BUILD_BRANCH "$ENV{GITHUB_REF_NAME}")
 endif()
 string(TIMESTAMP TRANSCRIBE_BUILD_DATE "%Y-%m-%dT%H:%M:%SZ" UTC)
