@@ -38,7 +38,10 @@ project(transcribe
 #   2. A strong-symbol build-id string in src/transcribe.cpp (strings/readelf).
 #   3. transcribe_version() / transcribe_version_commit() (runtime API).
 # All three derive from cmake/transcribe-build-info.h.in below, so they stay
-# in sync with the library version parsed from include/transcribe.h.
+# in sync with the library version parsed from include/transcribe.h. The
+# primary build-backend tag is appended to the provenance; it is resolved from
+# the TRANSCRIBE_* options, which are declared further down, so the generated
+# header is configured after the options block (see "Build backend tag").
 set(TRANSCRIBE_BUILD_COMMIT "unknown")
 set(TRANSCRIBE_BUILD_BRANCH "unknown")
 find_package(Git QUIET)
@@ -108,17 +111,6 @@ string(TIMESTAMP TRANSCRIBE_BUILD_DATE "%Y-%m-%dT%H:%M:%SZ" UTC)
 # vars so the generated header and .rc carry the same value transcribe_version()
 # reports, without re-stringizing the TRANSCRIBE_VERSION macro on the C++ side.
 set(TRANSCRIBE_VERSION "${TRANSCRIBE_VERSION_MAJOR}.${TRANSCRIBE_VERSION_MINOR}.${TRANSCRIBE_VERSION_PATCH}")
-
-# Generated header carrying the captured provenance. Consumed by the build-id
-# string in src/transcribe.cpp. Generated into the build tree (not the source
-# tree) so it never appears in git status; src/CMakeLists.txt adds the dir to
-# the transcribe target's PRIVATE include path.
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/transcribe-build-info.h.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/transcribe-build-info.h"
-    @ONLY)
-
-message(STATUS "transcribe version: ${TRANSCRIBE_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT}, branch ${TRANSCRIBE_BUILD_BRANCH}, built ${TRANSCRIBE_BUILD_DATE})")
 
 # -----------------------------------------------------------------------------
 # Standards
@@ -288,6 +280,41 @@ option(TRANSCRIBE_INSTALL
 # environment at run time. See tests/parakeet_real_smoke.cpp.
 option(TRANSCRIBE_BUILD_REAL_MODEL_TESTS
     "Build tests that load real (multi-GB) model files via env var" OFF)
+
+# -----------------------------------------------------------------------------
+# Build backend tag (build-id / version-string provenance)
+# -----------------------------------------------------------------------------
+#
+# The single accelerated backend a build is "for", stamped into the generated
+# provenance header and from there into the Windows VS_VERSION_INFO resource
+# and the build-id string. One primary tag, first enabled backend wins in the
+# order cuda > rocm > sycl > vulkan; a build with no accelerator enabled
+# reports "cpu". Naming matches the collapsed kinds in
+# cmake/transcribe-backend-kinds.cmake (hip -> rocm; the Intel backend is
+# ggml's SYCL, hence "sycl"). GGML_SYCL is read straight from the cache
+# because the project maps only CUDA/HIP/Vulkan/Metal through TRANSCRIBE_*
+# options — SYCL users pass -DGGML_SYCL=ON directly.
+set(TRANSCRIBE_BUILD_BACKEND "cpu")
+if(TRANSCRIBE_CUDA)
+    set(TRANSCRIBE_BUILD_BACKEND "cuda")
+elseif(TRANSCRIBE_HIP)
+    set(TRANSCRIBE_BUILD_BACKEND "rocm")
+elseif(GGML_SYCL)
+    set(TRANSCRIBE_BUILD_BACKEND "sycl")
+elseif(TRANSCRIBE_VULKAN)
+    set(TRANSCRIBE_BUILD_BACKEND "vulkan")
+endif()
+
+# Generated header carrying the captured provenance. Consumed by the build-id
+# string in src/transcribe.cpp. Generated into the build tree (not the source
+# tree) so it never appears in git status; src/CMakeLists.txt adds the dir to
+# the transcribe target's PRIVATE include path.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/transcribe-build-info.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/transcribe-build-info.h"
+    @ONLY)
+
+message(STATUS "transcribe version: ${TRANSCRIBE_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT}, branch ${TRANSCRIBE_BUILD_BRANCH}, built ${TRANSCRIBE_BUILD_DATE}, backend ${TRANSCRIBE_BUILD_BACKEND})")
 
 # -----------------------------------------------------------------------------
 # Warnings (no -Werror in v1 per PLAN.md)

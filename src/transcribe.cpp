@@ -191,9 +191,10 @@ extern "C" const char * transcribe_version_commit(void) {
 // compiler may split/merge their string literals), whereas this one constant
 // is laid down whole in .rdata/.rodata and survives as one grep-able line.
 //
-// Format:  "transcribe-build-id: <version> <commit> <branch> <date>"
+// Format:  "transcribe-build-id: <version> <commit> <branch> <date> <backend>"
 // where <version> mirrors transcribe_version() and the rest come from the
-// configure-time git capture (cmake/transcribe-build-info.h.in).
+// configure-time git capture (cmake/transcribe-build-info.h.in); <backend> is
+// the primary build backend tag (cuda/rocm/sycl/vulkan/cpu).
 //
 // Retention (Linux .so): keeping a metadata-only string through gcc/clang LTO
 // + --gc-sections is hard. An earlier version used a `volatile char` anchor in
@@ -211,8 +212,8 @@ extern "C" const char * transcribe_version_commit(void) {
 __attribute__((used))
 #endif
 const char kTranscribeBuildId[] =
-    "\ntranscribe-build-id: " TRANSCRIBE_BUILD_VERSION " "
-    TRANSCRIBE_BUILD_COMMIT " " TRANSCRIBE_BUILD_BRANCH " " TRANSCRIBE_BUILD_DATE "\n";
+    "\ntranscribe-build-id: " TRANSCRIBE_BUILD_VERSION " " TRANSCRIBE_BUILD_COMMIT " " TRANSCRIBE_BUILD_BRANCH
+    " " TRANSCRIBE_BUILD_DATE " " TRANSCRIBE_BUILD_BACKEND "\n";
 
 // Exported accessor for the build-ID string (declared TRANSCRIBE_API in
 // <transcribe.h>). Roots the literal against dead-stripping on Linux

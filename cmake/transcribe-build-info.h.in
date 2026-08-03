@@ -4,8 +4,9 @@
  * Generated at CMake configure time from cmake/transcribe-build-info.h.in.
  * Do not edit the generated file; edit the .in template or the git-capture
  * block at the top of CMakeLists.txt instead. Captures git state + build date
- * so the embedded Windows version resource and the strings-grep-able build-id
- * stay in sync with the library version parsed from include/transcribe.h.
+ * + the primary build backend tag so the embedded Windows version resource
+ * and the strings-grep-able build-id stay in sync with the library version
+ * parsed from include/transcribe.h.
  *
  * This is the single source of truth shared by the three build-version outlets:
  *   1. Windows VS_VERSION_INFO resource (file Properties > Details, no load)
@@ -25,5 +26,8 @@
 #define TRANSCRIBE_BUILD_BRANCH  "@TRANSCRIBE_BUILD_BRANCH@"
 /* ISO-8601 UTC build timestamp, e.g. "2026-08-02T18:30:00Z". */
 #define TRANSCRIBE_BUILD_DATE    "@TRANSCRIBE_BUILD_DATE@"
+/* Primary build-backend tag: "cuda", "rocm", "sycl", "vulkan", or "cpu"
+ * (first enabled accelerator wins; see the options block in CMakeLists.txt). */
+#define TRANSCRIBE_BUILD_BACKEND "@TRANSCRIBE_BUILD_BACKEND@"
 
 #endif /* TRANSCRIBE_BUILD_INFO_H */

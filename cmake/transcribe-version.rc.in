@@ -34,8 +34,8 @@ BEGIN
             VALUE "ProductName",      "transcribe.cpp\0"
             VALUE "ProductVersion",   VER_PRODUCTVERSION_STR
             // Full provenance in Comments so a single field carries everything:
-            // version | commit | branch | build date.
-            VALUE "Comments",         "transcribe.cpp | @TRANSCRIBE_VERSION@ | @TRANSCRIBE_BUILD_COMMIT@ | @TRANSCRIBE_BUILD_BRANCH@ | @TRANSCRIBE_BUILD_DATE@\0"
+            // version | commit | branch | build date | build backend.
+            VALUE "Comments",         "transcribe.cpp | @TRANSCRIBE_VERSION@ | @TRANSCRIBE_BUILD_COMMIT@ | @TRANSCRIBE_BUILD_BRANCH@ | @TRANSCRIBE_BUILD_DATE@ | @TRANSCRIBE_BUILD_BACKEND@\0"
         END
     END
     BLOCK "VarFileInfo"
