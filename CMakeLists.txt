@@ -42,9 +42,39 @@ project(transcribe
 set(TRANSCRIBE_BUILD_COMMIT "unknown")
 set(TRANSCRIBE_BUILD_BRANCH "unknown")
 find_package(Git QUIET)
-if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+# find_package(Git) can silently fail to set GIT_FOUND in some CI containers
+# (e.g. the nvidia/cuda image) even when git is installed, leaving the build-id
+# all-"unknown". Fall back to a direct PATH lookup so the configure-time git
+# capture works in every environment.
+if(NOT GIT_FOUND)
+    find_program(GIT_EXECUTABLE NAMES git git.exe)
+    if(GIT_EXECUTABLE)
+        set(GIT_FOUND TRUE)
+    endif()
+endif()
+# Probe for a usable git worktree. actions/checkout on GitHub runners runs
+# OUTSIDE the Docker container (e.g. nvidia/cuda, rocm) and only bind-mounts
+# the working tree into it; the .git directory is absent in-container, so a
+# literal EXISTS check fails and git commands return rc=128. Resolve the
+# worktree via `git rev-parse --git-dir` (which succeeds whenever git can
+# operate at all, regardless of where .git lives) and gate on that.
+set(_transcribe_in_git_worktree FALSE)
+if(GIT_FOUND)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short HEAD
+        COMMAND ${GIT_EXECUTABLE} -c safe.directory=* -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --git-dir
+        OUTPUT_VARIABLE _transcribe_git_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _transcribe_gitdir_rc)
+    if(_transcribe_gitdir_rc EQUAL 0)
+        set(_transcribe_in_git_worktree TRUE)
+    endif()
+endif()
+if(_transcribe_in_git_worktree)
+    # `-c safe.directory=*` bypasses git's "dubious ownership" refusal when the
+    # checkout's owner doesn't match the running user (common in CI containers).
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -c safe.directory=* -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short HEAD
         OUTPUT_VARIABLE _transcribe_git_sha
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET)
@@ -52,13 +82,25 @@ if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
         set(TRANSCRIBE_BUILD_COMMIT "${_transcribe_git_sha}")
     endif()
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --abbrev-ref HEAD
+        COMMAND ${GIT_EXECUTABLE} -c safe.directory=* -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --abbrev-ref HEAD
         OUTPUT_VARIABLE _transcribe_git_branch
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET)
     if(_transcribe_git_branch)
         set(TRANSCRIBE_BUILD_BRANCH "${_transcribe_git_branch}")
     endif()
+endif()
+# CI fallback: when .git is absent (Docker-container checkouts) the GitHub
+# Actions runner still exposes the commit and branch via environment variables
+# that are inherited by the container. Use them so the build-id carries real
+# provenance instead of "unknown". GITHUB_SHA is the full 40-char commit; trim
+# it to the short form so it matches the `git rev-parse --short HEAD` shape
+# captured above.
+if(NOT TRANSCRIBE_BUILD_COMMIT AND DEFINED ENV{GITHUB_SHA})
+    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 TRANSCRIBE_BUILD_COMMIT)
+endif()
+if(NOT TRANSCRIBE_BUILD_BRANCH AND DEFINED ENV{GITHUB_REF_NAME})
+    set(TRANSCRIBE_BUILD_BRANCH "$ENV{GITHUB_REF_NAME}")
 endif()
 string(TIMESTAMP TRANSCRIBE_BUILD_DATE "%Y-%m-%dT%H:%M:%SZ" UTC)
 
