@@ -331,6 +331,15 @@ TRANSCRIBE_API const char * transcribe_version(void);
 /* Short git commit the library was built from, or "unknown" when the build
  * tree carried no git metadata (e.g. an unpacked source tarball). */
 TRANSCRIBE_API const char * transcribe_version_commit(void);
+/*
+ * Build-ID string (borrowed pointer into static storage, do NOT free): a single
+ * grep-able line "transcribe-build-id: <version> <commit> <branch> <date>".
+ * Also embedded verbatim in the binary, so the same value is recoverable from
+ * the file alone via `strings <lib> | grep transcribe-build-id` without loading
+ * or calling it. <version> mirrors transcribe_version() and the rest come from
+ * the configure-time git capture.
+ */
+TRANSCRIBE_API const char * transcribe_build_id(void);
 
 /* ----------------------------------------------------------------------- */
 /* ABI metadata                                                            */

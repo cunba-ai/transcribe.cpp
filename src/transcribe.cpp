@@ -195,17 +195,34 @@ extern "C" const char * transcribe_version_commit(void) {
 // where <version> mirrors transcribe_version() and the rest come from the
 // configure-time git capture (cmake/transcribe-build-info.h.in).
 //
-// NOTE: intentionally not exported (anonymous namespace → hidden visibility).
-// It is a metadata marker, not part of the C ABI. The leading '\n' and the
-// volatile read below defeat dead-stripping so the linker keeps the literal
-// even though no public symbol references it.
+// Retention (Linux .so): keeping a metadata-only string through gcc/clang LTO
+// + --gc-sections is hard. An earlier version used a `volatile char` anchor in
+// an anonymous namespace; that internally-linked, only-self-referenced object
+// was removed by the ELF linker even without --gc-sections, so the strings
+// outlet was empty on .so (MSVC has no such DCE, so .dll worked). The triple
+// defense here mirrors audio.cpp's kAudiocppBuildId: (1) external linkage (no
+// anonymous namespace), (2) the GCC `used` attribute forbidding the compiler
+// from dropping the symbol, (3) an exported referencing function
+// (transcribe_build_id) so the linker keeps it. The array itself is NOT part
+// of the C ABI; the exported accessor roots it, and the literal stays grep-
+// able via `strings <lib> | grep transcribe-build-id`.
 #include "transcribe-build-info.h"
-namespace {
+#if defined(__GNUC__)
+__attribute__((used))
+#endif
 const char kTranscribeBuildId[] =
     "\ntranscribe-build-id: " TRANSCRIBE_BUILD_VERSION " "
     TRANSCRIBE_BUILD_COMMIT " " TRANSCRIBE_BUILD_BRANCH " " TRANSCRIBE_BUILD_DATE "\n";
-[[maybe_unused]] volatile char transcribe_build_id_anchor = kTranscribeBuildId[0];
-}  // namespace
+
+// Exported accessor for the build-ID string (declared TRANSCRIBE_API in
+// <transcribe.h>). Roots the literal against dead-stripping on Linux
+// (gcc/clang + --gc-sections / LTO): the earlier `volatile char` anchor in an
+// anonymous namespace was removed by the linker even without --gc-sections, so
+// .so lost the string (.dll was unaffected). Returns a borrowed pointer into
+// static storage; never free.
+extern "C" const char * transcribe_build_id(void) {
+    return kTranscribeBuildId;
+}
 
 // Raw enum reads at the public ABI boundary
 //
