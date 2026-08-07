@@ -43,6 +43,7 @@ add_library(transcribe ${_transcribe_lib_type}
     causal_lm/causal_lm.cpp
     granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
+    arch/parakeet/multitalker.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
     arch/parakeet/encoder.cpp
