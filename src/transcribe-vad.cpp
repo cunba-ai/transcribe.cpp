@@ -76,22 +76,27 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
         int64_t span_end_ms;
         int64_t speech_end_ms;  // furthest speech seen in this window
     };
+
     std::vector<ChunkState> states;
-    const int64_t           pad = padding_ms > 0 ? padding_ms : 0;
+    const int64_t           pad         = padding_ms > 0 ? padding_ms : 0;
     const bool              has_ceiling = max_chunk_ms > 0;
 
-    auto padded_start = [&](int64_t s) { return std::max<int64_t>(s - pad, 0); };
-    auto padded_end   = [&](int64_t e) { return std::min<int64_t>(e + pad, total_ms); };
-    auto start_chunk  = [&](int64_t & span_start, int64_t span_end, int64_t speech_start, int64_t speech_end) {
+    auto padded_start = [&](int64_t s) {
+        return std::max<int64_t>(s - pad, 0);
+    };
+    auto padded_end = [&](int64_t e) {
+        return std::min<int64_t>(e + pad, total_ms);
+    };
+    auto start_chunk = [&](int64_t & span_start, int64_t span_end, int64_t speech_start, int64_t speech_end) {
         int64_t chunk_end = has_ceiling ? std::min<int64_t>(span_end, span_start + max_chunk_ms) : span_end;
-        int64_t se = (chunk_end > speech_start) ? std::min<int64_t>(speech_end, chunk_end) : span_start;
-        states.push_back(ChunkState{span_start, chunk_end, se});
+        int64_t se        = (chunk_end > speech_start) ? std::min<int64_t>(speech_end, chunk_end) : span_start;
+        states.push_back(ChunkState{ span_start, chunk_end, se });
         span_start = chunk_end;
     };
 
     for (const auto & seg : segs) {
-        int64_t span_start = padded_start(seg.start_ms);
-        const int64_t span_end   = padded_end(seg.end_ms);
+        int64_t       span_start   = padded_start(seg.start_ms);
+        const int64_t span_end     = padded_end(seg.end_ms);
         const int64_t speech_start = seg.start_ms;
         const int64_t speech_end   = seg.end_ms;
         while (span_start < span_end) {
@@ -105,14 +110,14 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
                 if (span_start <= cur.span_end_ms) {
                     // overlaps current window
                     if (!has_ceiling) {
-                        cur.span_end_ms = span_end;
+                        cur.span_end_ms   = span_end;
                         cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
                         break;
                     }
                     const int64_t capacity_end = cur.span_start_ms + max_chunk_ms;
                     if (span_end <= capacity_end) {
                         // fits in budget: grow current window
-                        cur.span_end_ms = span_end;
+                        cur.span_end_ms   = span_end;
                         cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
                         break;
                     }
@@ -122,7 +127,7 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
                         const int64_t boundary = std::min<int64_t>(cur.span_end_ms, speech_start);
                         if (boundary >= cur.speech_end_ms && boundary > cur.span_start_ms) {
                             cur.span_end_ms = boundary;
-                            span_start = boundary;
+                            span_start      = boundary;
                             start_chunk(span_start, span_end, speech_start, speech_end);
                             continue;
                         }
@@ -131,8 +136,8 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
                     if (cur.span_end_ms < capacity_end) {
                         cur.span_end_ms = std::min<int64_t>(span_end, capacity_end);
                         if (cur.span_end_ms > speech_start) {
-                            cur.speech_end_ms = std::max(cur.speech_end_ms,
-                                                         std::min<int64_t>(speech_end, cur.span_end_ms));
+                            cur.speech_end_ms =
+                                std::max(cur.speech_end_ms, std::min<int64_t>(speech_end, cur.span_end_ms));
                         }
                         span_start = cur.span_end_ms;
                         continue;
@@ -140,15 +145,14 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
                 } else if (has_ceiling) {
                     // disjoint from current window
                     const int64_t gap = span_start - cur.span_end_ms;
-                    if (merge_gap_ms > 0 && gap <= merge_gap_ms &&
-                        span_end - cur.span_start_ms <= max_chunk_ms) {
-                        cur.span_end_ms = span_end;
+                    if (merge_gap_ms > 0 && gap <= merge_gap_ms && span_end - cur.span_start_ms <= max_chunk_ms) {
+                        cur.span_end_ms   = span_end;
                         cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
                         break;
                     }
                 } else {
                     // disjoint, no ceiling: merge (one unbounded window)
-                    cur.span_end_ms = span_end;
+                    cur.span_end_ms   = span_end;
                     cur.speech_end_ms = std::max(cur.speech_end_ms, speech_end);
                     break;
                 }
@@ -164,8 +168,8 @@ std::vector<chunk_plan> plan(const std::vector<time_span> & speech,
         cp.source_span.start_ms   = st.span_start_ms;
         cp.source_span.end_ms     = st.span_end_ms;
         cp.source_span.confidence = 1.0f;
-        cp.keep_span.start_ms = std::max<int64_t>(st.span_start_ms + pad, 0);
-        cp.keep_span.end_ms   = std::min<int64_t>(st.span_end_ms - pad, total_ms);
+        cp.keep_span.start_ms     = std::max<int64_t>(st.span_start_ms + pad, 0);
+        cp.keep_span.end_ms       = std::min<int64_t>(st.span_end_ms - pad, total_ms);
         if (cp.keep_span.end_ms <= cp.keep_span.start_ms) {
             // padding ate the whole window (very short speech); keep it all
             cp.keep_span.start_ms = st.span_start_ms;

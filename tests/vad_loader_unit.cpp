@@ -25,8 +25,7 @@ int g_failures = 0;
 
 void test_missing_path_fails_cleanly() {
     std::string err;
-    auto r = transcribe::vad::audiocpp::load_audiocpp_dll(
-        "Z:\\nonexistent\\path\\definitely_not_here.dll", err);
+    auto        r = transcribe::vad::audiocpp::load_audiocpp_dll("Z:\\nonexistent\\path\\definitely_not_here.dll", err);
     CHECK(r.handle == nullptr);
     CHECK(r.syms.load_model == nullptr);
     CHECK(r.syms.vad == nullptr);
@@ -39,7 +38,7 @@ void test_null_explicit_path_does_not_crash() {
     // err is meaningful when handle==null. (A dev box with the dll on PATH
     // may legitimately return a non-null handle, so we don't assert null.)
     std::string err;
-    auto r = transcribe::vad::audiocpp::load_audiocpp_dll(nullptr, err);
+    auto        r = transcribe::vad::audiocpp::load_audiocpp_dll(nullptr, err);
     if (r.handle == nullptr) {
         CHECK(!err.empty());
     }

@@ -13,8 +13,8 @@
 #ifndef TRANSCRIBE_VAD_INTEGRATE_H
 #define TRANSCRIBE_VAD_INTEGRATE_H
 
-#include "transcribe.h"
 #include "transcribe-vad.h"  // chunk_plan, chunk_baseline used in merge helpers
+#include "transcribe.h"
 
 #include <cstddef>
 
@@ -51,9 +51,7 @@ chunk_baseline snapshot(const struct transcribe_session & s);
 // their timestamps by chunk.keep_span.start_ms and fix cross-references
 // (word/token seg_index, segment first_word/first_token) from chunk-local
 // to global indices.
-void offset_chunk_results(struct transcribe_session &   s,
-                          const chunk_baseline &        base,
-                          const chunk_plan &            chunk);
+void offset_chunk_results(struct transcribe_session & s, const chunk_baseline & base, const chunk_plan & chunk);
 
 // Trim the three result vectors back to baseline (drop a failed chunk's
 // partial entries while keeping earlier chunks' results).

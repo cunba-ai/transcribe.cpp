@@ -30,8 +30,8 @@
 #include "transcribe-tokenizer.h"
 #include "transcribe-vad.h"  // effective_mode / params_present always compiled
 #if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
-#  include "transcribe-vad-audiocpp.h"
-#  include "transcribe-vad-integrate.h"
+#    include "transcribe-vad-audiocpp.h"
+#    include "transcribe-vad-integrate.h"
 #endif
 #include "transcribe/whisper.h"
 
@@ -635,11 +635,11 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
         return;
     }
     std::memset(p, 0, sizeof(*p));
-    p->struct_size   = sizeof(*p);
-    p->spec_k_drafts = -1;  // family default
+    p->struct_size     = sizeof(*p);
+    p->spec_k_drafts   = -1;  // family default
     // Default to AUTO (richest output compatible with the model and selected
     // run tasks, resolved per-family) rather than the memset NONE.
-    p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
+    p->timestamps      = TRANSCRIBE_TIMESTAMPS_AUTO;
     // VAD: memset already zeroed vad.* (mode=OFF, struct_size=0). Record the
     // sub-struct size so internal code can trust vad.struct_size.
     p->vad.struct_size = sizeof(p->vad);
@@ -1752,9 +1752,9 @@ extern "C" void transcribe_set_abort_callback(struct transcribe_session * sessio
     session->abort_userdata = user_data;
 }
 
-extern "C" void transcribe_set_progress_callback(struct transcribe_session *   session,
+extern "C" void transcribe_set_progress_callback(struct transcribe_session *  session,
                                                  transcribe_progress_callback cb,
-                                                 void *                        user_data) {
+                                                 void *                       user_data) {
     if (session == nullptr) {
         return;
     }
@@ -2278,9 +2278,8 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     // is absent so there's zero overhead.
 #if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
     if (transcribe::vad::effective_mode(params) != TRANSCRIBE_VAD_OFF) {
-        bool                     degraded = false;
-        const transcribe_status  vst =
-            transcribe::vad::run_with_vad(session, pcm, n_samples, params, degraded);
+        bool                    degraded = false;
+        const transcribe_status vst      = transcribe::vad::run_with_vad(session, pcm, n_samples, params, degraded);
         if (!degraded) {
             return vst;
         }
@@ -3300,7 +3299,7 @@ extern "C" transcribe_status transcribe_run(struct transcribe_session *         
 }
 
 #if defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) && (TRANSCRIBE_VAD_VIA_AUDIOCPP != 0)
-extern "C" transcribe_status transcribe_vad(const float *                         pcm,
+extern "C" transcribe_status transcribe_vad(const float *                        pcm,
                                             int                                  n_samples,
                                             int                                  sample_rate,
                                             const struct transcribe_vad_params * vad_params,
@@ -3335,8 +3334,8 @@ extern "C" transcribe_status transcribe_vad(const float *                       
         }
 
         std::string err;
-        if (!transcribe::vad::audiocpp::runtime::instance().ensure_loaded(
-                vp.dll_path, vp.mode, vp.backend, vp.device_id, vp.n_threads, err)) {
+        if (!transcribe::vad::audiocpp::runtime::instance().ensure_loaded(vp.dll_path, vp.mode, vp.backend,
+                                                                          vp.device_id, vp.n_threads, err)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_vad: load failed: %s", err.c_str());
             return TRANSCRIBE_ERR_BACKEND;
         }
@@ -3356,8 +3355,8 @@ extern "C" transcribe_status transcribe_vad(const float *                       
             *out_n_segments = 0;
             return TRANSCRIBE_OK;
         }
-        auto * arr = static_cast<transcribe_vad_segment *>(
-            std::calloc(static_cast<size_t>(n), sizeof(transcribe_vad_segment)));
+        auto * arr =
+            static_cast<transcribe_vad_segment *>(std::calloc(static_cast<size_t>(n), sizeof(transcribe_vad_segment)));
         if (arr == nullptr) {
             return TRANSCRIBE_ERR_OOM;
         }

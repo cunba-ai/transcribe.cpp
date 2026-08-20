@@ -51,12 +51,11 @@ void test_null_params_is_off() {
 void test_old_struct_size_treated_as_off() {
     transcribe_run_params full;
     transcribe_run_params_init(&full);
-    const size_t vad_off =
-        offsetof(transcribe_run_params, vad);  // byte offset of vad field
+    const size_t vad_off = offsetof(transcribe_run_params, vad);  // byte offset of vad field
 
     // A caller whose declared struct_size stops BEFORE the vad field.
     const uint64_t short_size = static_cast<uint64_t>(vad_off);
-    full.struct_size = short_size;  // pretend the caller's struct is this short
+    full.struct_size          = short_size;  // pretend the caller's struct is this short
 
     CHECK(!params_present(&full));
     CHECK(effective_mode(&full) == TRANSCRIBE_VAD_OFF);

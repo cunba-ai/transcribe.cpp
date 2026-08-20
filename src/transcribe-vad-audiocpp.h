@@ -8,8 +8,8 @@
 #ifndef TRANSCRIBE_VAD_AUDIOCPP_H
 #define TRANSCRIBE_VAD_AUDIOCPP_H
 
-#include "transcribe.h"
 #include "transcribe-vad.h"  // time_span
+#include "transcribe.h"
 
 #include <cstdint>
 #include <mutex>
@@ -28,39 +28,40 @@ namespace transcribe::vad::audiocpp {
 
 struct audiocpp_model_t;  // opaque
 struct audiocpp_vad_t;    // opaque
+
 struct audiocpp_error_t {
-    int   code;
-    char *message;
+    int    code;
+    char * message;
 };
 
 // ---- Function pointer typedefs (mirror audiocpp.h prototypes) -------------
 //
 // AUDIOCPP_TASK_VAD = 0, AUDIOCPP_BACKEND_CPU = 0.
 
-using load_model_fn = audiocpp_model_t * (*)(const char * model_path,
-                                             const char * family_hint,
-                                             int          task,
-                                             int          backend,
-                                             int          device_id,
-                                             int          n_threads,
-                                             audiocpp_error_t * err);
+using load_model_fn = audiocpp_model_t * (*) (const char *       model_path,
+                                              const char *       family_hint,
+                                              int                task,
+                                              int                backend,
+                                              int                device_id,
+                                              int                n_threads,
+                                              audiocpp_error_t * err);
 
 using free_model_fn = void (*)(audiocpp_model_t * model);
 
 // Returns audiocpp_vad_t (caller frees via free_vad). NULL on failure.
-using vad_fn = audiocpp_vad_t * (*)(const audiocpp_model_t * model,
-                                    const float *            pcm,
-                                    int64_t                  n_samples,
-                                    int                      sample_rate,
-                                    const char *             options_json,
-                                    audiocpp_error_t *       err);
+using vad_fn = audiocpp_vad_t * (*) (const audiocpp_model_t * model,
+                                     const float *            pcm,
+                                     int64_t                  n_samples,
+                                     int                      sample_rate,
+                                     const char *             options_json,
+                                     audiocpp_error_t *       err);
 
 // Energy VAD: no model needed.
-using vad_energy_fn = audiocpp_vad_t * (*)(const float *      pcm,
-                                           int64_t            n_samples,
-                                           int                sample_rate,
-                                           const char *       options_json,
-                                           audiocpp_error_t * err);
+using vad_energy_fn = audiocpp_vad_t * (*) (const float *      pcm,
+                                            int64_t            n_samples,
+                                            int                sample_rate,
+                                            const char *       options_json,
+                                            audiocpp_error_t * err);
 
 using free_vad_fn    = void (*)(audiocpp_vad_t * vad);
 using free_string_fn = void (*)(char * s);
@@ -104,7 +105,7 @@ loaded_dll load_audiocpp_dll(const char * explicit_path, std::string & err_msg);
 // Loading is idempotent (std::call_once): the first ensure_loaded wins;
 // later calls return the cached ok/err state without retrying.
 class runtime {
-public:
+  public:
     static runtime & instance();
 
     // Idempotent. On the first call, loads the dll (via load_audiocpp_dll
@@ -115,27 +116,29 @@ public:
     // result without retrying — a bad dll won't recover mid-process).
     //
     // Thread-safe. Never throws.
-    bool ensure_loaded(const char *         dll_path,
-                       transcribe_vad_mode  mode,
-                       int                  backend,
-                       int                  device_id,
-                       int                  n_threads,
-                       std::string &        err_msg);
+    bool ensure_loaded(const char *        dll_path,
+                       transcribe_vad_mode mode,
+                       int                 backend,
+                       int                 device_id,
+                       int                 n_threads,
+                       std::string &       err_msg);
 
-    bool               loaded_ok() const { return loaded_ok_; }
-    const symbols &    syms() const { return syms_; }
+    bool loaded_ok() const { return loaded_ok_; }
+
+    const symbols & syms() const { return syms_; }
+
     audiocpp_model_t * model() const { return model_; }  // may be null (ENERGY)
 
     // Serializes audiocpp_vad / audiocpp_vad_energy calls (single handle is
     // not concurrent-safe). Callers lock this around their vad invoke.
     std::mutex & vad_mutex() { return vad_mutex_; }
 
-private:
+  private:
     runtime() = default;
     std::once_flag     load_once_;
     void *             dll_handle_ = nullptr;
     symbols            syms_{};
-    audiocpp_model_t * model_      = nullptr;
+    audiocpp_model_t * model_ = nullptr;
     std::mutex         vad_mutex_;
     bool               loaded_ok_ = false;
     std::string        load_err_;
@@ -154,9 +157,7 @@ namespace transcribe::vad {
 //
 // Requires audiocpp::runtime::instance().ensure_loaded(...) to have returned
 // true for this mode before the call.
-std::vector<time_span> vad_invoke(const float *                   pcm,
-                                  int64_t                         n_samples,
-                                  const struct transcribe_vad_params & params);
+std::vector<time_span> vad_invoke(const float * pcm, int64_t n_samples, const struct transcribe_vad_params & params);
 
 }  // namespace transcribe::vad
 

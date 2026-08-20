@@ -234,7 +234,7 @@ struct transcribe_session {
     // Returns the callback's int: 0 = continue, non-0 = cancel requested.
     // Semantics mirror audiocpp_progress_fn. Streaming runs do not fire it.
     transcribe_progress_callback progress_cb       = nullptr;
-    void *                      progress_userdata = nullptr;
+    void *                       progress_userdata = nullptr;
 
     // Returns 0 if no callback installed or callback returned 0 (continue);
     // non-zero if the callback requested cancellation.
@@ -242,9 +242,8 @@ struct transcribe_session {
         if (progress_cb == nullptr) {
             return 0;
         }
-        const float frac = total > 0
-            ? std::clamp(static_cast<float>(completed) / static_cast<float>(total), 0.0f, 1.0f)
-            : 0.0f;
+        const float frac =
+            total > 0 ? std::clamp(static_cast<float>(completed) / static_cast<float>(total), 0.0f, 1.0f) : 0.0f;
         return progress_cb(frac, stage, completed, total, progress_userdata);
     }
 

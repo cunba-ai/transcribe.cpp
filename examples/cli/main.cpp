@@ -258,33 +258,33 @@ struct cli_args {
     // ms-aligned chunks instead of one transcribe_run call. Requires
     // the loaded model to advertise supports_streaming. Set by
     // --stream-chunk-ms N.
-    int stream_chunk_ms      = 0;
+    int         stream_chunk_ms      = 0;
     // Parakeet streaming: pick a right-context (lookahead) setting
     // from the model's training menu. -1 = model default (max
     // accuracy / max latency); 0/1/6/13 select the published
     // nemotron-speech-streaming-en-0.6b settings. Set by
     // --stream-att-right N. Ignored when stream_chunk_ms == 0.
-    int stream_att_right     = -1;
+    int         stream_att_right     = -1;
     // Parakeet buffered streaming (parakeet-unified-en-0.6b): override
     // the (L, C, R) attention context tuple in milliseconds. -1 = use
     // the model's default (highest-accuracy row of the training menu).
     // Frame-aligned: the lib rounds each value down to the nearest
     // post-subsample frame (80ms at 4x subsampling). Ignored when
     // stream_chunk_ms == 0 or when the model is not buffered-streaming.
-    int stream_buf_left_ms   = -1;
-    int stream_buf_chunk_ms  = -1;
-    int stream_buf_right_ms  = -1;
+    int         stream_buf_left_ms   = -1;
+    int         stream_buf_chunk_ms  = -1;
+    int         stream_buf_right_ms  = -1;
     // Voxtral Realtime streaming: transcription delay in 12.5 Hz audio
     // tokens (80 ms each). -1 = model default (6 = 480 ms). Set by
     // --stream-voxtral-delay N. Ignored when stream_chunk_ms == 0 or when
     // the model is not voxtral_realtime.
-    int stream_voxtral_delay = -1;
+    int         stream_voxtral_delay = -1;
     // Speculative-decode draft length passed through to
     // transcribe_run_params::spec_k_drafts on the offline path. -1 = family
     // default (each family picks its tuned K). 0 = explicitly off. >0 =
     // explicit K. Silently ignored by families without
     // supports_spec_decode. Set by --spec-k-drafts N.
-    int spec_k_drafts        = -1;
+    int         spec_k_drafts        = -1;
     // VAD preprocessing (optional, requires audiocpp.dll at runtime and the
     // library built with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON). "" = off (the
     // default; transcribe_run_params_init zeroes vad.mode). Set by --vad-mode.
@@ -295,8 +295,8 @@ struct cli_args {
     // VAD compute backend forwarded to audiocpp (AUDIOCPP_BACKEND_*; the dll
     // ships CPU+CUDA/ROCm/Vulkan). 0 = CPU. Set by --vad-backend. Mirrors the
     // ASR --backend concept but for the VAD model inside audiocpp.dll.
-    int vad_backend = 0;
-    int vad_device  = 0;  // --vad-device N
+    int         vad_backend = 0;
+    int         vad_device  = 0;  // --vad-device N
 };
 
 void print_usage(const char * argv0) {
@@ -912,8 +912,8 @@ int main(int argc, char ** argv) {
         // with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON for the field to take effect;
         // otherwise it's parsed as OFF and transcribe_run runs full-buffer.
         if (!args.vad_mode.empty() && args.vad_mode != "off") {
-            rp.vad.mode    = (args.vad_mode == "energy") ? TRANSCRIBE_VAD_ENERGY : TRANSCRIBE_VAD_SILERO;
-            rp.vad.backend = args.vad_backend;
+            rp.vad.mode      = (args.vad_mode == "energy") ? TRANSCRIBE_VAD_ENERGY : TRANSCRIBE_VAD_SILERO;
+            rp.vad.backend   = args.vad_backend;
             rp.vad.device_id = args.vad_device;
             if (!args.vad_dll.empty()) {
                 rp.vad.dll_path = args.vad_dll.c_str();
@@ -1348,8 +1348,8 @@ int main(int argc, char ** argv) {
         // with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON for the field to take effect;
         // otherwise it's parsed as OFF and transcribe_run runs full-buffer.
         if (!args.vad_mode.empty() && args.vad_mode != "off") {
-            rp.vad.mode    = (args.vad_mode == "energy") ? TRANSCRIBE_VAD_ENERGY : TRANSCRIBE_VAD_SILERO;
-            rp.vad.backend = args.vad_backend;
+            rp.vad.mode      = (args.vad_mode == "energy") ? TRANSCRIBE_VAD_ENERGY : TRANSCRIBE_VAD_SILERO;
+            rp.vad.backend   = args.vad_backend;
             rp.vad.device_id = args.vad_device;
             if (!args.vad_dll.empty()) {
                 rp.vad.dll_path = args.vad_dll.c_str();

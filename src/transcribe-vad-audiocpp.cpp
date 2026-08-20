@@ -8,11 +8,11 @@
 #include <string>
 
 #if defined(_WIN32)
-#  define WIN32_LEAN_AND_MEAN
-#  define NOMINMAX
-#  include <windows.h>
+#    define WIN32_LEAN_AND_MEAN
+#    define NOMINMAX
+#    include <windows.h>
 #else
-#  include <dlfcn.h>
+#    include <dlfcn.h>
 #endif
 
 namespace transcribe::vad::audiocpp {
@@ -62,10 +62,10 @@ bool discover_path(const char * explicit_path, std::string & candidate) {
         return true;
     }
     // Executable directory.
-    char exe[MAX_PATH] = {0};
+    char exe[MAX_PATH] = { 0 };
     if (GetModuleFileNameA(nullptr, exe, MAX_PATH) > 0) {
         std::string dir(exe);
-        const auto slash = dir.find_last_of("\\/");
+        const auto  slash = dir.find_last_of("\\/");
         if (slash != std::string::npos) {
             dir.resize(slash + 1);
             candidate = dir + "audiocpp.dll";
@@ -89,8 +89,7 @@ bool discover_path(const char * explicit_path, std::string & candidate) {
 #endif
 }
 
-template <typename Fn>
-bool resolve(void * h, const char * name, Fn & out, std::string & err_msg) {
+template <typename Fn> bool resolve(void * h, const char * name, Fn & out, std::string & err_msg) {
     void * p = platform_sym(h, name);
     if (p == nullptr) {
         err_msg += std::string("missing symbol: ") + name + "; ";
@@ -157,7 +156,7 @@ bool runtime::ensure_loaded(const char *        dll_path,
                             int                 n_threads,
                             std::string &       err_msg) {
     std::call_once(load_once_, [&] {
-        loaded_ok_ = false;
+        loaded_ok_  = false;
         auto loaded = load_audiocpp_dll(dll_path, load_err_);
         if (loaded.handle == nullptr) {
             return;  // load_err_ already set
@@ -169,13 +168,8 @@ bool runtime::ensure_loaded(const char *        dll_path,
             // Embedded weights: pass NULL model_path. family_hint="silero_vad",
             // task=VAD(0), backend/device/threads forwarded.
             audiocpp_error_t err{};
-            model_ = syms_.load_model(/*model_path*/ nullptr,
-                                      "silero_vad",
-                                      /*task VAD*/ 0,
-                                      backend,
-                                      device_id,
-                                      n_threads,
-                                      &err);
+            model_ = syms_.load_model(/*model_path*/ nullptr, "silero_vad",
+                                      /*task VAD*/ 0, backend, device_id, n_threads, &err);
             if (model_ == nullptr) {
                 load_err_ = "audiocpp_load_model(silero_vad) returned NULL";
                 if (syms_.clear_error) {
@@ -209,15 +203,14 @@ struct audiocpp_vad_segment_t {
     int64_t end_sample;
     float   confidence;
 };
+
 struct audiocpp_vad_t {
     audiocpp_vad_segment_t * segments;
     int64_t                  n_segments;
 };
 }  // namespace audiocpp
 
-std::vector<time_span> vad_invoke(const float *                        pcm,
-                                  int64_t                              n_samples,
-                                  const struct transcribe_vad_params & params) {
+std::vector<time_span> vad_invoke(const float * pcm, int64_t n_samples, const struct transcribe_vad_params & params) {
     using transcribe::vad::audiocpp::audiocpp_error_t;
     using transcribe::vad::audiocpp::audiocpp_vad_t;
     using transcribe::vad::audiocpp::runtime;
@@ -232,7 +225,7 @@ std::vector<time_span> vad_invoke(const float *                        pcm,
     // threshold/etc. where applicable; extra keys are ignored by audiocpp).
     std::string options = "{";
     bool        first   = true;
-    auto        add = [&](const char * k, const std::string & v) {
+    auto        add     = [&](const char * k, const std::string & v) {
         if (!first) {
             options += ",";
         }

@@ -28,7 +28,9 @@ using transcribe::vad::chunk_plan;
 using transcribe::vad::plan;
 using transcribe::vad::time_span;
 
-time_span ms(int64_t a, int64_t b) { return time_span{a, b, 1.0f}; }
+time_span ms(int64_t a, int64_t b) {
+    return time_span{ a, b, 1.0f };
+}
 
 void assert_windows_sorted_nonoverlapping(const std::vector<chunk_plan> & w) {
     for (size_t i = 1; i < w.size(); ++i) {
@@ -49,7 +51,7 @@ void test_empty_input() {
 }
 
 void test_single_segment_one_window() {
-    auto w = plan({ms(1000, 3000)}, 10000, 15000, 500, 250);
+    auto w = plan({ ms(1000, 3000) }, 10000, 15000, 500, 250);
     CHECK(w.size() == 1);
     CHECK(w[0].keep_span.start_ms == 1000);
     CHECK(w[0].keep_span.end_ms == 3000);
@@ -63,31 +65,31 @@ void test_merge_small_gap() {
     // into the current window when BOTH the gap <= merge_gap_ms AND the
     // merged length fits max_chunk_ms. Here total length (1000-3500 = 2500ms)
     // is well under the 15000ms ceiling, so both pairs merge into one window.
-    auto w = plan({ms(1000, 2000), ms(2500, 3500)}, 10000, 15000, 500, 0);
+    auto w = plan({ ms(1000, 2000), ms(2500, 3500) }, 10000, 15000, 500, 0);
     CHECK(w.size() == 1);
     CHECK(w[0].keep_span.start_ms == 1000);
     CHECK(w[0].keep_span.end_ms == 3500);
     // merge_gap=0 disables the disjoint-merge path: each segment is its own
     // window (they don't overlap/touch, so greedy-pack leaves them separate).
-    auto w_sep = plan({ms(1000, 2000), ms(2500, 3500)}, 10000, 15000, 0, 0);
+    auto w_sep = plan({ ms(1000, 2000), ms(2500, 3500) }, 10000, 15000, 0, 0);
     CHECK(w_sep.size() == 2);
 }
 
 void test_padding_clamped_at_boundaries() {
     // seg at very start: padding clamped to 0
-    auto w = plan({ms(0, 1000)}, 10000, 15000, 500, 500);
+    auto w = plan({ ms(0, 1000) }, 10000, 15000, 500, 500);
     CHECK(w.size() == 1);
     CHECK(w[0].source_span.start_ms == 0);  // 0-500 clamped
     CHECK(w[0].source_span.end_ms == 1500);
     // seg at very end: padding clamped to total_ms
-    auto w2 = plan({ms(9000, 10000)}, 10000, 15000, 500, 500);
+    auto w2 = plan({ ms(9000, 10000) }, 10000, 15000, 500, 500);
     CHECK(w2[0].source_span.start_ms == 8500);
     CHECK(w2[0].source_span.end_ms == 10000);
 }
 
 void test_split_oversized_window() {
     // one segment 40s long, ceiling 15s -> split into [0,15000],[15000,30000],[30000,40000]
-    auto w = plan({ms(0, 40000)}, 40000, 15000, 500, 0);
+    auto w = plan({ ms(0, 40000) }, 40000, 15000, 500, 0);
     CHECK(w.size() == 3);
     CHECK(w[0].keep_span.start_ms == 0);
     CHECK(w[0].keep_span.end_ms == 15000);
@@ -104,7 +106,7 @@ void test_split_prefers_internal_gap() {
     // algorithm keeps them as two separate windows (the disjoint-merge path
     // requires the merged length to fit max_chunk). Each window stays voiced
     // and within budget — no hard mid-segment cut needed.
-    auto w = plan({ms(0, 9500), ms(10500, 20000)}, 20000, 15000, 2000, 0);
+    auto w = plan({ ms(0, 9500), ms(10500, 20000) }, 20000, 15000, 2000, 0);
     CHECK(w.size() == 2);
     CHECK(w[0].keep_span.start_ms == 0);
     CHECK(w[0].keep_span.end_ms == 9500);
@@ -116,7 +118,7 @@ void test_split_prefers_internal_gap() {
 void test_split_hard_cut_when_no_gap() {
     // A single 20s segment with no internal gap, ceiling 15s: must hard-cut
     // at 15000 (no boundary to prefer).
-    auto w = plan({ms(0, 20000)}, 20000, 15000, 500, 0);
+    auto w = plan({ ms(0, 20000) }, 20000, 15000, 500, 0);
     CHECK(w.size() == 2);
     CHECK(w[0].keep_span.start_ms == 0);
     CHECK(w[0].keep_span.end_ms == 15000);
@@ -126,7 +128,7 @@ void test_split_hard_cut_when_no_gap() {
 
 void test_no_ceiling_one_window() {
     // max_chunk_ms <= 0 -> never split
-    auto w = plan({ms(0, 50000)}, 50000, 0, 500, 0);
+    auto w = plan({ ms(0, 50000) }, 50000, 0, 500, 0);
     CHECK(w.size() == 1);
     CHECK(w[0].keep_span.start_ms == 0);
     CHECK(w[0].keep_span.end_ms == 50000);
@@ -134,7 +136,7 @@ void test_no_ceiling_one_window() {
 
 void test_segments_clipped_to_total() {
     // seg extends past total_ms -> clipped
-    auto w = plan({ms(8000, 12000)}, 10000, 15000, 500, 0);
+    auto w = plan({ ms(8000, 12000) }, 10000, 15000, 500, 0);
     CHECK(w.size() == 1);
     CHECK(w[0].keep_span.start_ms == 8000);
     CHECK(w[0].keep_span.end_ms == 10000);  // clipped
@@ -142,7 +144,7 @@ void test_segments_clipped_to_total() {
 
 void test_degenerate_segment_dropped() {
     // zero-length and inverted segs dropped
-    auto w = plan({ms(1000, 1000), ms(3000, 2000), ms(1000, 2000)}, 10000, 15000, 500, 0);
+    auto w = plan({ ms(1000, 1000), ms(3000, 2000), ms(1000, 2000) }, 10000, 15000, 500, 0);
     CHECK(w.size() == 1);
     CHECK(w[0].keep_span.start_ms == 1000);
     CHECK(w[0].keep_span.end_ms == 2000);
@@ -150,8 +152,8 @@ void test_degenerate_segment_dropped() {
 
 void test_many_segments_unsorted() {
     // input unsorted -> output sorted, non-overlapping keep spans
-    std::vector<time_span> segs = {ms(5000, 6000), ms(0, 1000), ms(2000, 3000)};
-    auto                   w = plan(segs, 10000, 15000, 500, 0);
+    std::vector<time_span> segs = { ms(5000, 6000), ms(0, 1000), ms(2000, 3000) };
+    auto                   w    = plan(segs, 10000, 15000, 500, 0);
     assert_windows_sorted_nonoverlapping(w);
     assert_keep_within_source(w);
     CHECK(w.size() == 3);

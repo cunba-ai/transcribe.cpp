@@ -1122,11 +1122,11 @@ typedef enum {
  * numeric defaults resolved at runtime.
  */
 struct transcribe_vad_params {
-    uint64_t struct_size; /* sizeof(struct transcribe_vad_params) */
+    uint64_t struct_size;     /* sizeof(struct transcribe_vad_params) */
 
     transcribe_vad_mode mode; /* default OFF */
 
-    const char * dll_path; /* NULL -> discovery order:
+    const char * dll_path;    /* NULL -> discovery order:
                              *   1. this field
                              *   2. env TRANSCRIBE_VAD_DLL
                              *   3. executable dir
@@ -1137,25 +1137,25 @@ struct transcribe_vad_params {
                                * audiocpp.dll; the current dll bakes Silero
                                * weights in and ignores this. */
 
-    int backend;   /* 0 = CPU; forwarded to audiocpp AUDIOCPP_BACKEND_*.
+    int backend;              /* 0 = CPU; forwarded to audiocpp AUDIOCPP_BACKEND_*.
                     * The dll ships CPU+CUDA/ROCm/SYCL/Vulkan; pick via this
                     * field, not by swapping dlls. */
-    int device_id; /* GPU index; ignored on CPU */
-    int n_threads; /* 0 = auto */
+    int device_id;            /* GPU index; ignored on CPU */
+    int n_threads;            /* 0 = auto */
 
-    int64_t max_chunk_ms; /* per-window ceiling; <=0 -> family
+    int64_t max_chunk_ms;     /* per-window ceiling; <=0 -> family
                            * effective_max_audio_ms (via
                            * transcribe_session_get_limits), or 30000 if
                            * that is 0/unbounded */
-    int64_t merge_gap_ms; /* default 500; <=0 -> never merge */
-    int64_t padding_ms;   /* default 250; <0 -> 0 */
+    int64_t merge_gap_ms;     /* default 500; <=0 -> never merge */
+    int64_t padding_ms;       /* default 250; <0 -> 0 */
 
     /* Silero tuning (SILERO mode only). <=0 / 0 means "use audiocpp
      * defaults" (threshold 0.5, min_speech 250ms, min_silence 100ms).
      * Forwarded to audiocpp_vad as an options_json string. */
-    float   silero_threshold;       /* default 0.5; <=0 -> default */
-    int64_t silero_min_speech_ms;   /* default 250; <=0 -> default */
-    int64_t silero_min_silence_ms;  /* default 100; <=0 -> default */
+    float   silero_threshold;      /* default 0.5; <=0 -> default */
+    int64_t silero_min_speech_ms;  /* default 250; <=0 -> default */
+    int64_t silero_min_silence_ms; /* default 100; <=0 -> default */
 };
 
 /*
@@ -1182,7 +1182,7 @@ typedef struct transcribe_vad_segment {
  * -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1; a link error otherwise (see the note
  * above transcribe_vad_mode).
  */
-TRANSCRIBE_API transcribe_status transcribe_vad(const float *                         pcm,
+TRANSCRIBE_API transcribe_status transcribe_vad(const float *                        pcm,
                                                 int                                  n_samples,
                                                 int                                  sample_rate,
                                                 const struct transcribe_vad_params * vad_params,
@@ -1816,7 +1816,7 @@ TRANSCRIBE_API void transcribe_set_abort_callback(struct transcribe_session * se
  * cancel request and contained at the emission site, never escaping the
  * C ABI). Do not call transcribe_* APIs from inside the callback.
  */
-typedef int (*transcribe_progress_callback)(float       progress,
+typedef int (*transcribe_progress_callback)(float        progress,
                                             const char * stage,
                                             int64_t      completed_units,
                                             int64_t      total_units,
@@ -1830,9 +1830,9 @@ typedef int (*transcribe_progress_callback)(float       progress,
  * (transcribe_stream_*) do NOT fire this callback — streaming progress
  * remains pull-based via transcribe_stream_update.
  */
-TRANSCRIBE_API void transcribe_set_progress_callback(struct transcribe_session *   session,
+TRANSCRIBE_API void transcribe_set_progress_callback(struct transcribe_session *  session,
                                                      transcribe_progress_callback cb,
-                                                     void *                        user_data);
+                                                     void *                       user_data);
 
 /*
  * True if the most recent transcribe_run was aborted by the installed

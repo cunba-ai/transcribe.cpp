@@ -8,16 +8,17 @@
 // TRANSCRIBE_VAD_VIA_AUDIOCPP is on (see src/CMakeLists.txt). The #error
 // catches a hand-edited build that tries to compile it unconditionally.
 #if !defined(TRANSCRIBE_VAD_VIA_AUDIOCPP) || (TRANSCRIBE_VAD_VIA_AUDIOCPP == 0)
-#  error "transcribe-vad-integrate.cpp requires -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1"
+#    error "transcribe-vad-integrate.cpp requires -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1"
 #endif
 
 #include "transcribe-vad-integrate.h"
-#include "transcribe-vad-audiocpp.h"
-#include "transcribe-vad.h"
+
 #include "transcribe-arch.h"
 #include "transcribe-log.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
+#include "transcribe-vad-audiocpp.h"
+#include "transcribe-vad.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -27,7 +28,7 @@
 namespace transcribe::vad {
 
 chunk_baseline snapshot(const transcribe_session & s) {
-    return chunk_baseline{s.segments.size(), s.words.size(), s.tokens.size()};
+    return chunk_baseline{ s.segments.size(), s.words.size(), s.tokens.size() };
 }
 
 // Offset the entries added since `base` by chunk.keep_span.start_ms, and
@@ -42,9 +43,7 @@ chunk_baseline snapshot(const transcribe_session & s) {
 //   - new word.first_token += base.n_tokens
 //   - new segment.first_word  += base.n_words
 //   - new segment.first_token += base.n_tokens
-void offset_chunk_results(transcribe_session &   s,
-                          const chunk_baseline & base,
-                          const chunk_plan &     chunk) {
+void offset_chunk_results(transcribe_session & s, const chunk_baseline & base, const chunk_plan & chunk) {
     const int64_t dt = chunk.keep_span.start_ms;
 
     // tokens
@@ -106,13 +105,11 @@ transcribe_status run_with_vad(struct transcribe_session *          session,
     }
 
     // 1. Ensure the audiocpp runtime is loaded. On failure -> degrade.
-    std::string       err;
-    const auto &      vp = params->vad;
-    if (!audiocpp::runtime::instance().ensure_loaded(
-            vp.dll_path, mode, vp.backend, vp.device_id, vp.n_threads, err)) {
+    std::string  err;
+    const auto & vp = params->vad;
+    if (!audiocpp::runtime::instance().ensure_loaded(vp.dll_path, mode, vp.backend, vp.device_id, vp.n_threads, err)) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
-                            "VAD: audiocpp load failed (%s); falling back to full-buffer decode",
-                            err.c_str());
+                            "VAD: audiocpp load failed (%s); falling back to full-buffer decode", err.c_str());
         degraded = true;
         return TRANSCRIBE_OK;
     }
@@ -122,8 +119,8 @@ transcribe_status run_with_vad(struct transcribe_session *          session,
     try {
         speech = vad_invoke(pcm, n_samples, vp);
     } catch (const std::exception & e) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
-                            "VAD: invoke failed (%s); falling back to full-buffer decode", e.what());
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "VAD: invoke failed (%s); falling back to full-buffer decode",
+                            e.what());
         degraded = true;
         return TRANSCRIBE_OK;
     }
@@ -158,9 +155,9 @@ transcribe_status run_with_vad(struct transcribe_session *          session,
     }
 
     // 5. The VAD loop.
-    auto *             arch  = session->model->arch;  // const Arch *
-    const std::string  stage = std::string("asr+") + (arch->name ? arch->name : "?");
-    const int64_t      n_total = static_cast<int64_t>(chunks.size());
+    auto *            arch    = session->model->arch;  // const Arch *
+    const std::string stage   = std::string("asr+") + (arch->name ? arch->name : "?");
+    const int64_t     n_total = static_cast<int64_t>(chunks.size());
 
     // Initial progress (0/N). Non-0 return = cancel -> abort with nothing yet.
     if (session->emit_progress(stage.c_str(), 0, n_total) != 0) {
@@ -178,8 +175,8 @@ transcribe_status run_with_vad(struct transcribe_session *          session,
         }
 
         // Slice PCM for this chunk's source_span (ms -> samples at 16 kHz).
-        const int64_t s0 = chunks[static_cast<size_t>(i)].source_span.start_ms;
-        const int64_t s1 = chunks[static_cast<size_t>(i)].source_span.end_ms;
+        const int64_t s0  = chunks[static_cast<size_t>(i)].source_span.start_ms;
+        const int64_t s1  = chunks[static_cast<size_t>(i)].source_span.end_ms;
         const int     off = static_cast<int>(s0 * 16000 / 1000);
         const int     len = static_cast<int>((s1 - s0) * 16000 / 1000);
         if (off < 0 || len <= 0 || static_cast<int64_t>(off) + len > n_samples) {
@@ -193,7 +190,7 @@ transcribe_status run_with_vad(struct transcribe_session *          session,
 
         // Snapshot before run; offset after. Reset per-chunk timing accumulators
         // so arch->run sees a clean slate for THIS chunk's decode timing.
-        chunk_baseline base = snapshot(*session);
+        chunk_baseline base  = snapshot(*session);
         session->t_mel_us    = 0;
         session->t_encode_us = 0;
         session->t_decode_us = 0;

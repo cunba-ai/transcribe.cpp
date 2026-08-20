@@ -39,10 +39,7 @@ using transcribe::vad::time_span;
 // Simulate arch->run for one chunk: append a segment + word + token with
 // CHUNK-LOCAL timestamps and indices, exactly as a family run() driver would.
 // The merge helper then shifts them to global.
-void append_chunk_local(transcribe_session & s,
-                        int64_t              seg_t0,
-                        int64_t              seg_t1,
-                        const char *         text) {
+void append_chunk_local(transcribe_session & s, int64_t seg_t0, int64_t seg_t1, const char * text) {
     using Seg  = transcribe_session::SegmentEntry;
     using Word = transcribe_session::WordEntry;
     using Tok  = transcribe_session::TokenEntry;
@@ -50,10 +47,10 @@ void append_chunk_local(transcribe_session & s,
     const int seg_idx_local = static_cast<int>(s.segments.size());  // grows by 1 below
 
     Tok tok;
-    tok.text      = "t";
-    tok.t0_ms     = seg_t0;
-    tok.t1_ms     = seg_t1;
-    tok.seg_index = 0;  // chunk-local: this chunk's first segment
+    tok.text       = "t";
+    tok.t0_ms      = seg_t0;
+    tok.t1_ms      = seg_t1;
+    tok.seg_index  = 0;  // chunk-local: this chunk's first segment
     tok.word_index = 0;
     s.tokens.push_back(tok);
 
@@ -80,8 +77,8 @@ void append_chunk_local(transcribe_session & s,
 
 chunk_plan make_chunk(int64_t keep_start, int64_t keep_end) {
     chunk_plan cp;
-    cp.keep_span   = time_span{keep_start, keep_end, 1.0f};
-    cp.source_span = time_span{keep_start, keep_end, 1.0f};
+    cp.keep_span   = time_span{ keep_start, keep_end, 1.0f };
+    cp.source_span = time_span{ keep_start, keep_end, 1.0f };
     return cp;
 }
 
@@ -151,7 +148,7 @@ void test_rollback_drops_failed_chunk() {
 
 void test_empty_chunk_no_change() {
     transcribe_session s;
-    chunk_baseline b = snapshot(s);
+    chunk_baseline     b = snapshot(s);
     // No append — offset over an empty delta is a no-op.
     offset_chunk_results(s, b, make_chunk(5000, 6000));
     CHECK(s.segments.empty());

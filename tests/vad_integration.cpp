@@ -104,9 +104,9 @@ transcribe_status run_asr(const std::string & model_path,
                           std::string &       out_text) {
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CUDA;  // ASR on GPU
+    mp.backend               = TRANSCRIBE_BACKEND_CUDA;  // ASR on GPU
     transcribe_model * model = nullptr;
-    transcribe_status  st = transcribe_model_load_file(model_path.c_str(), &mp, &model);
+    transcribe_status  st    = transcribe_model_load_file(model_path.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK || model == nullptr) {
         return st == TRANSCRIBE_OK ? TRANSCRIBE_ERR_BACKEND : st;
     }
@@ -114,7 +114,7 @@ transcribe_status run_asr(const std::string & model_path,
     transcribe_session_params cp;
     transcribe_session_params_init(&cp);
     transcribe_session * ctx = nullptr;
-    st = transcribe_session_init(model, &cp, &ctx);
+    st                       = transcribe_session_init(model, &cp, &ctx);
     if (st != TRANSCRIBE_OK || ctx == nullptr) {
         transcribe_model_free(model);
         return st == TRANSCRIBE_OK ? TRANSCRIBE_ERR_BACKEND : st;
@@ -126,11 +126,11 @@ transcribe_status run_asr(const std::string & model_path,
     // (meeting.wav) is Chinese; forcing "en" makes the model not converge to
     // EOS and run into the generation budget (OUTPUT_TRUNCATED).
     if (vad_mode != TRANSCRIBE_VAD_OFF) {
-        rp.vad.mode    = vad_mode;
+        rp.vad.mode         = vad_mode;
         // VAD backend: CPU (0) by default to isolate VAD logic from GPU
         // state. Override via TRANSCRIBE_VAD_TEST_BACKEND for GPU testing.
         const char * vb_env = std::getenv("TRANSCRIBE_VAD_TEST_BACKEND");
-        rp.vad.backend = (vb_env && vb_env[0]) ? std::atoi(vb_env) : 0;
+        rp.vad.backend      = (vb_env && vb_env[0]) ? std::atoi(vb_env) : 0;
         // Qwen3-ASR advertises a huge effective_max_audio_ms (~87 min, from
         // its 65536-token INPUT context) but a 256-token GENERATION budget.
         // VAD's default max_chunk (family effective_max_audio_ms) would
@@ -219,14 +219,14 @@ int main() {
     // exactly what VAD chunking is for, so:
     //   <= 30s: run full-buffer AND VAD-chunked, assert word-level equality.
     //   >  30s: run VAD-chunked only, assert it produces non-empty text.
-    const double  audio_seconds = static_cast<double>(pcm.size()) / 16000.0;
-    const bool    short_audio = audio_seconds <= 30.0;
+    const double audio_seconds = static_cast<double>(pcm.size()) / 16000.0;
+    const bool   short_audio   = audio_seconds <= 30.0;
 
-    std::string   text_full;
-    bool          full_ok = false;
+    std::string text_full;
+    bool        full_ok = false;
     if (short_audio) {
-        transcribe_status st_full = run_asr(model_path, pcm.data(), static_cast<int>(pcm.size()),
-                                            TRANSCRIBE_VAD_OFF, text_full);
+        transcribe_status st_full =
+            run_asr(model_path, pcm.data(), static_cast<int>(pcm.size()), TRANSCRIBE_VAD_OFF, text_full);
         if (st_full == TRANSCRIBE_ERR_BACKEND) {
             std::printf("vad_integration: SKIP (ASR backend init failed; CUDA unavailable?)\n");
             return 77;
@@ -238,14 +238,16 @@ int main() {
         }
         std::printf("vad_integration: full-buffer text: %zu chars\n", text_full.size());
     } else {
-        std::printf("vad_integration: long audio (%.1fs) — skipping full-buffer (would OOM/truncate); "
-                    "VAD chunking is the point here\n", audio_seconds);
+        std::printf(
+            "vad_integration: long audio (%.1fs) — skipping full-buffer (would OOM/truncate); "
+            "VAD chunking is the point here\n",
+            audio_seconds);
     }
 
     // 2. VAD-chunked run (SILERO). This is the path under test.
-    std::string      text_vad;
-    const transcribe_status st_vad = run_asr(model_path, pcm.data(), static_cast<int>(pcm.size()),
-                                             TRANSCRIBE_VAD_SILERO, text_vad);
+    std::string             text_vad;
+    const transcribe_status st_vad =
+        run_asr(model_path, pcm.data(), static_cast<int>(pcm.size()), TRANSCRIBE_VAD_SILERO, text_vad);
     CHECK(st_vad == TRANSCRIBE_OK);
     if (st_vad != TRANSCRIBE_OK) {
         std::fprintf(stderr, "vad_integration: VAD-chunked ASR failed (status %d)\n", st_vad);
@@ -263,10 +265,10 @@ int main() {
     //    - If full-buffer truncated/OOM'd (long audio): we already asserted
     //      VAD produced text; that IS the value VAD adds here.
     if (full_ok) {
-        const int  dist     = edit_distance(text_full, text_vad);
-        const int  max_dist = static_cast<int>(text_full.size() / 10) + 5;  // ~10% + slack
-        std::printf("vad_integration: full=%zu chars, vad=%zu chars, edit_distance=%d (max %d)\n",
-                    text_full.size(), text_vad.size(), dist, max_dist);
+        const int dist     = edit_distance(text_full, text_vad);
+        const int max_dist = static_cast<int>(text_full.size() / 10) + 5;  // ~10% + slack
+        std::printf("vad_integration: full=%zu chars, vad=%zu chars, edit_distance=%d (max %d)\n", text_full.size(),
+                    text_vad.size(), dist, max_dist);
         if (dist > max_dist) {
             std::fprintf(stderr,
                          "vad_integration: edit distance %d exceeds %d — VAD chunking changed "
@@ -275,8 +277,10 @@ int main() {
             ++g_failures;
         }
     } else {
-        std::printf("vad_integration: long-audio path — VAD produced %zu chars (full-buffer "
-                    "unavailable for compare)\n", text_vad.size());
+        std::printf(
+            "vad_integration: long-audio path — VAD produced %zu chars (full-buffer "
+            "unavailable for compare)\n",
+            text_vad.size());
     }
 
     if (g_failures == 0) {
