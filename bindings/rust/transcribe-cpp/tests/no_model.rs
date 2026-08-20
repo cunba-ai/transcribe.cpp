@@ -5,15 +5,33 @@ mod common;
 
 use transcribe_cpp::{
     abi_struct_size, backend_available, compiled_version, device_count, devices, header_hash,
-    init_backends_default, version, AbiStruct, Backend, DeviceType, Error, Model,
+    init_backends_default, version, version_commit, AbiStruct, Backend, DeviceType, Error, Model,
 };
 
 #[test]
 fn version_gate_agrees() {
     // The pre-1.0 base-version lock: the linked library and the generated
-    // bindings must report the same MAJOR.MINOR.PATCH.
-    assert_eq!(version(), compiled_version());
-    assert!(!version().is_empty());
+    // bindings must report the same MAJOR.MINOR.PATCH. The native
+    // transcribe_version() carries the full build provenance
+    // "MAJOR.MINOR.PATCH <commit> <branch> <build-time> <backend>", so the
+    // gate is prefix-match on the dotted head (the same contract the Python
+    // provider version gate and tests/api_smoke.c rely on).
+    let native = version();
+    let compiled = compiled_version();
+    assert!(
+        native.starts_with(&compiled),
+        "native version {native:?} does not start with compiled {compiled:?}"
+    );
+    // Provenance tail: >= 4 more space-separated segments after the release
+    // head, ending in a non-empty backend tag.
+    assert!(native.len() > compiled.len(), "no provenance tail: {native:?}");
+    assert_eq!(native.as_bytes()[compiled.len()], b' ');
+    assert!(!native.ends_with(' '));
+
+    // The commit segment of the provenance equals version_commit().
+    let tail = &native[compiled.len() + 1..];
+    let commit_seg = tail.split(' ').next().unwrap_or_default();
+    assert_eq!(commit_seg, version_commit());
 }
 
 #[test]
