@@ -1330,6 +1330,23 @@ add_test(NAME transcribe_tokenizer_decode_only_unit
     COMMAND transcribe_tokenizer_decode_only_unit)
 
 # -----------------------------------------------------------------------------
+# Whisper .bin synthesized suppression metadata
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_whisper_bin_suppress_unit
+    whisper_bin_suppress_unit.cpp)
+
+target_link_libraries(transcribe_whisper_bin_suppress_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_whisper_bin_suppress_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_whisper_bin_suppress_unit)
+
+add_test(NAME transcribe_whisper_bin_suppress_unit
+    COMMAND transcribe_whisper_bin_suppress_unit)
+
+# -----------------------------------------------------------------------------
 # Whisper .bin parser unit test
 # -----------------------------------------------------------------------------
 #
@@ -1408,4 +1425,10 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
             -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
             -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-output-smoke
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_output_smoke.cmake)
+
+    add_test(NAME transcribe_cli_device_arg_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_device_arg_smoke.cmake)
 endif()
