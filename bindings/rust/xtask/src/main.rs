@@ -331,6 +331,9 @@ fn not_loaded_default(ret: &str) -> &'static str {
         "usize" => "0",
         "::std::os::raw::c_int" => "-1",
         "transcribe_status" => "transcribe_status(8)", // TRANSCRIBE_ERR_BACKEND
+        // Opaque device-handle typedef: null is both the not-loaded default
+        // and the API's own failure sentinel.
+        "transcribe_device_t" => "::std::ptr::null_mut()",
         "transcribe_timestamp_kind" => "transcribe_timestamp_kind(0)",
         "transcribe_stream_state" => "transcribe_stream_state(0)",
         s if s.starts_with("*const ") => "::std::ptr::null()",

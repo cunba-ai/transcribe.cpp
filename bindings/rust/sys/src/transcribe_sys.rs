@@ -49,6 +49,9 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn transcribe_version_commit() -> *const ::std::os::raw::c_char;
 }
+unsafe extern "C" {
+    pub fn transcribe_build_id() -> *const ::std::os::raw::c_char;
+}
 impl transcribe_abi_struct {
     pub const TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: transcribe_abi_struct = transcribe_abi_struct(0);
     pub const TRANSCRIBE_ABI_SESSION_PARAMS: transcribe_abi_struct = transcribe_abi_struct(1);
