@@ -108,6 +108,19 @@ static void test_version(void) {
     CHECK(strncmp(v, TRANSCRIBE_VERSION, strlen(TRANSCRIBE_VERSION)) == 0);
     CHECK(v[strlen(TRANSCRIBE_VERSION)] == ' ');
 
+    /* The provenance tail: >= 4 space-separated tokens after the release
+     * segment (<commit> <branch> <build-time> <backend>). Branch names may
+     * in principle contain spaces, so the count is a floor, not an exact
+     * total; the last token (backend tag) must be non-empty. */
+    int tokens = 1;
+    for (const char * p = v; *p != '\0'; ++p) {
+        if (*p == ' ') {
+            ++tokens;
+        }
+    }
+    CHECK(tokens >= 5);
+    CHECK(v[strlen(v) - 1] != ' ');
+
     /* The numeric form stays consistent with the components. */
     CHECK(TRANSCRIBE_VERSION_NUMBER ==
           TRANSCRIBE_VERSION_MAJOR * 10000 + TRANSCRIBE_VERSION_MINOR * 100 + TRANSCRIBE_VERSION_PATCH);
@@ -117,6 +130,42 @@ static void test_version(void) {
     const char * commit = transcribe_version_commit();
     CHECK(commit != NULL);
     CHECK(commit[0] != '\0');
+}
+
+static void test_build_id(void) {
+    /* transcribe_build_id() returns one grep-able line
+     * "transcribe-build-id: <version> <commit> <branch> <date> <backend>"
+     * into static storage (never freed). The embedded literal is wrapped in
+     * leading/trailing newlines so `strings` shows it on its own line; the
+     * accessor hands that storage back verbatim, so skip a single leading
+     * '\n' if present. After that, no interior newline: the whole value
+     * must be recoverable as one line. */
+    const char * raw = transcribe_build_id();
+    CHECK(raw != NULL);
+    const char * id = (raw[0] == '\n') ? raw + 1 : raw;
+    CHECK(strncmp(id, "transcribe-build-id: ", 21) == 0);
+
+    /* No interior newline: after dropping one leading and one trailing
+     * newline (the strings-friendly wrapper), the value is a single line. */
+    size_t len = strlen(id);
+    if (len > 0 && id[len - 1] == '\n') {
+        --len;
+    }
+    for (size_t i = 0; i < len; ++i) {
+        CHECK(id[i] != '\n');
+        CHECK(id[i] != '\r');
+    }
+
+    /* The segment after the prefix is the release version, and the commit
+     * follows it: "transcribe-build-id: " VERSION " " commit ... */
+    const char * seg = id + 21;
+    CHECK(strncmp(seg, TRANSCRIBE_VERSION, strlen(TRANSCRIBE_VERSION)) == 0);
+    CHECK(seg[strlen(TRANSCRIBE_VERSION)] == ' ');
+    const char * commit_seg = seg + strlen(TRANSCRIBE_VERSION) + 1;
+    const char * commit     = transcribe_version_commit();
+    CHECK(commit != NULL);
+    CHECK(strncmp(commit_seg, commit, strlen(commit)) == 0);
+    CHECK(commit_seg[strlen(commit)] == ' ');
 }
 
 static void test_abi_metadata(void) {
@@ -814,6 +863,7 @@ static void test_session_limits_abi(void) {
 int main(void) {
     test_status_string();
     test_version();
+    test_build_id();
     test_abi_metadata();
     test_backend_devices();
     test_log_level_values();
