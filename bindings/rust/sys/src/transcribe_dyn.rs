@@ -42,6 +42,7 @@ pub struct transcribe_status(pub ::std::os::raw::c_uint);
 
 
 
+
 impl transcribe_abi_struct {
     pub const TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: transcribe_abi_struct = transcribe_abi_struct(0);
     pub const TRANSCRIBE_ABI_SESSION_PARAMS: transcribe_abi_struct = transcribe_abi_struct(1);
@@ -1071,6 +1072,7 @@ pub(crate) const TRANSCRIBE_DYN_SYMBOLS: &[&[u8]] = &[
     b"transcribe_status_string",
     b"transcribe_version",
     b"transcribe_version_commit",
+    b"transcribe_build_id",
     b"transcribe_abi_struct_size",
     b"transcribe_abi_struct_align",
     b"transcribe_log_set",
@@ -1211,23 +1213,23 @@ pub unsafe extern "C" fn transcribe_version_commit() -> *const ::std::os::raw::c
     }
 }
 
-/// Runtime trampoline for `transcribe_abi_struct_size` — index 3 in
+/// Runtime trampoline for `transcribe_build_id` — index 3 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_abi_struct_size(which: transcribe_abi_struct) -> usize {
+pub unsafe extern "C" fn transcribe_build_id() -> *const ::std::os::raw::c_char {
     match crate::dynload::fn_ptr(3) {
         Some(__ptr) => {
-            let __f: unsafe extern "C" fn(transcribe_abi_struct) -> usize = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(which) }
+            let __f: unsafe extern "C" fn() -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f() }
         }
-        None => 0,
+        None => ::std::ptr::null(),
     }
 }
 
-/// Runtime trampoline for `transcribe_abi_struct_align` — index 4 in
+/// Runtime trampoline for `transcribe_abi_struct_size` — index 4 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_abi_struct_align(which: transcribe_abi_struct) -> usize {
+pub unsafe extern "C" fn transcribe_abi_struct_size(which: transcribe_abi_struct) -> usize {
     match crate::dynload::fn_ptr(4) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(transcribe_abi_struct) -> usize = unsafe { ::std::mem::transmute(__ptr) };
@@ -1237,11 +1239,24 @@ pub unsafe extern "C" fn transcribe_abi_struct_align(which: transcribe_abi_struc
     }
 }
 
-/// Runtime trampoline for `transcribe_log_set` — index 5 in
+/// Runtime trampoline for `transcribe_abi_struct_align` — index 5 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_abi_struct_align(which: transcribe_abi_struct) -> usize {
+    match crate::dynload::fn_ptr(5) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(transcribe_abi_struct) -> usize = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(which) }
+        }
+        None => 0,
+    }
+}
+
+/// Runtime trampoline for `transcribe_log_set` — index 6 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_log_set(cb: transcribe_log_callback, userdata: *mut ::std::os::raw::c_void) -> () {
-    match crate::dynload::fn_ptr(5) {
+    match crate::dynload::fn_ptr(6) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(transcribe_log_callback, *mut ::std::os::raw::c_void) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(cb, userdata) }
@@ -1250,11 +1265,11 @@ pub unsafe extern "C" fn transcribe_log_set(cb: transcribe_log_callback, userdat
     }
 }
 
-/// Runtime trampoline for `transcribe_ext_check` — index 6 in
+/// Runtime trampoline for `transcribe_ext_check` — index 7 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_ext_check(ext: *const transcribe_ext, expected_kind: u32, min_size: u64) -> transcribe_status {
-    match crate::dynload::fn_ptr(6) {
+    match crate::dynload::fn_ptr(7) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_ext, u32, u64) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext, expected_kind, min_size) }
@@ -1263,11 +1278,11 @@ pub unsafe extern "C" fn transcribe_ext_check(ext: *const transcribe_ext, expect
     }
 }
 
-/// Runtime trampoline for `transcribe_model_accepts_ext_kind` — index 7 in
+/// Runtime trampoline for `transcribe_model_accepts_ext_kind` — index 8 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_accepts_ext_kind(model: *const transcribe_model, slot: transcribe_ext_slot, kind: u32) -> bool {
-    match crate::dynload::fn_ptr(7) {
+    match crate::dynload::fn_ptr(8) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model, transcribe_ext_slot, u32) -> bool = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model, slot, kind) }
@@ -1276,11 +1291,11 @@ pub unsafe extern "C" fn transcribe_model_accepts_ext_kind(model: *const transcr
     }
 }
 
-/// Runtime trampoline for `transcribe_init_backends` — index 8 in
+/// Runtime trampoline for `transcribe_init_backends` — index 9 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_init_backends(artifact_dir: *const ::std::os::raw::c_char) -> transcribe_status {
-    match crate::dynload::fn_ptr(8) {
+    match crate::dynload::fn_ptr(9) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const ::std::os::raw::c_char) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(artifact_dir) }
@@ -1289,11 +1304,11 @@ pub unsafe extern "C" fn transcribe_init_backends(artifact_dir: *const ::std::os
     }
 }
 
-/// Runtime trampoline for `transcribe_init_backends_default` — index 9 in
+/// Runtime trampoline for `transcribe_init_backends_default` — index 10 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_init_backends_default() -> transcribe_status {
-    match crate::dynload::fn_ptr(9) {
+    match crate::dynload::fn_ptr(10) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn() -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f() }
@@ -1302,11 +1317,11 @@ pub unsafe extern "C" fn transcribe_init_backends_default() -> transcribe_status
     }
 }
 
-/// Runtime trampoline for `transcribe_device_count` — index 10 in
+/// Runtime trampoline for `transcribe_device_count` — index 11 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_device_count() -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(10) {
+    match crate::dynload::fn_ptr(11) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn() -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f() }
@@ -1315,11 +1330,11 @@ pub unsafe extern "C" fn transcribe_device_count() -> ::std::os::raw::c_int {
     }
 }
 
-/// Runtime trampoline for `transcribe_device_get` — index 11 in
+/// Runtime trampoline for `transcribe_device_get` — index 12 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_device_get(index: ::std::os::raw::c_int) -> transcribe_device_t {
-    match crate::dynload::fn_ptr(11) {
+    match crate::dynload::fn_ptr(12) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(::std::os::raw::c_int) -> transcribe_device_t = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(index) }
@@ -1328,11 +1343,11 @@ pub unsafe extern "C" fn transcribe_device_get(index: ::std::os::raw::c_int) -> 
     }
 }
 
-/// Runtime trampoline for `transcribe_device_info_init` — index 12 in
+/// Runtime trampoline for `transcribe_device_info_init` — index 13 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_device_info_init(p: *mut transcribe_device_info) -> () {
-    match crate::dynload::fn_ptr(12) {
+    match crate::dynload::fn_ptr(13) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_device_info) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(p) }
@@ -1341,11 +1356,11 @@ pub unsafe extern "C" fn transcribe_device_info_init(p: *mut transcribe_device_i
     }
 }
 
-/// Runtime trampoline for `transcribe_device_get_info` — index 13 in
+/// Runtime trampoline for `transcribe_device_get_info` — index 14 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_device_get_info(device: transcribe_device_t, out: *mut transcribe_device_info) -> transcribe_status {
-    match crate::dynload::fn_ptr(13) {
+    match crate::dynload::fn_ptr(14) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(transcribe_device_t, *mut transcribe_device_info) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(device, out) }
@@ -1354,11 +1369,11 @@ pub unsafe extern "C" fn transcribe_device_get_info(device: transcribe_device_t,
     }
 }
 
-/// Runtime trampoline for `transcribe_backend_available` — index 14 in
+/// Runtime trampoline for `transcribe_backend_available` — index 15 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_backend_available(kind: transcribe_backend_request) -> bool {
-    match crate::dynload::fn_ptr(14) {
+    match crate::dynload::fn_ptr(15) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(transcribe_backend_request) -> bool = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(kind) }
@@ -1367,11 +1382,11 @@ pub unsafe extern "C" fn transcribe_backend_available(kind: transcribe_backend_r
     }
 }
 
-/// Runtime trampoline for `transcribe_model_device` — index 15 in
+/// Runtime trampoline for `transcribe_model_device` — index 16 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_device(model: *const transcribe_model) -> transcribe_device_t {
-    match crate::dynload::fn_ptr(15) {
+    match crate::dynload::fn_ptr(16) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model) -> transcribe_device_t = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model) }
@@ -1380,11 +1395,11 @@ pub unsafe extern "C" fn transcribe_model_device(model: *const transcribe_model)
     }
 }
 
-/// Runtime trampoline for `transcribe_model_load_params_init` — index 16 in
+/// Runtime trampoline for `transcribe_model_load_params_init` — index 17 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_load_params_init(params: *mut transcribe_model_load_params) -> () {
-    match crate::dynload::fn_ptr(16) {
+    match crate::dynload::fn_ptr(17) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_model_load_params) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(params) }
@@ -1393,11 +1408,11 @@ pub unsafe extern "C" fn transcribe_model_load_params_init(params: *mut transcri
     }
 }
 
-/// Runtime trampoline for `transcribe_session_params_init` — index 17 in
+/// Runtime trampoline for `transcribe_session_params_init` — index 18 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_session_params_init(params: *mut transcribe_session_params) -> () {
-    match crate::dynload::fn_ptr(17) {
+    match crate::dynload::fn_ptr(18) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session_params) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(params) }
@@ -1406,11 +1421,11 @@ pub unsafe extern "C" fn transcribe_session_params_init(params: *mut transcribe_
     }
 }
 
-/// Runtime trampoline for `transcribe_vad` — index 18 in
+/// Runtime trampoline for `transcribe_vad` — index 19 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_vad(pcm: *const f32, n_samples: ::std::os::raw::c_int, sample_rate: ::std::os::raw::c_int, vad_params: *const transcribe_vad_params, out_segments: *mut *mut transcribe_vad_segment, out_n_segments: *mut i64) -> transcribe_status {
-    match crate::dynload::fn_ptr(18) {
+    match crate::dynload::fn_ptr(19) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const f32, ::std::os::raw::c_int, ::std::os::raw::c_int, *const transcribe_vad_params, *mut *mut transcribe_vad_segment, *mut i64) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(pcm, n_samples, sample_rate, vad_params, out_segments, out_n_segments) }
@@ -1419,11 +1434,11 @@ pub unsafe extern "C" fn transcribe_vad(pcm: *const f32, n_samples: ::std::os::r
     }
 }
 
-/// Runtime trampoline for `transcribe_free_vad` — index 19 in
+/// Runtime trampoline for `transcribe_free_vad` — index 20 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_free_vad(segments: *mut transcribe_vad_segment) -> () {
-    match crate::dynload::fn_ptr(19) {
+    match crate::dynload::fn_ptr(20) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_vad_segment) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(segments) }
@@ -1432,11 +1447,11 @@ pub unsafe extern "C" fn transcribe_free_vad(segments: *mut transcribe_vad_segme
     }
 }
 
-/// Runtime trampoline for `transcribe_run_params_init` — index 20 in
+/// Runtime trampoline for `transcribe_run_params_init` — index 21 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_run_params_init(params: *mut transcribe_run_params) -> () {
-    match crate::dynload::fn_ptr(20) {
+    match crate::dynload::fn_ptr(21) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_run_params) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(params) }
@@ -1445,11 +1460,11 @@ pub unsafe extern "C" fn transcribe_run_params_init(params: *mut transcribe_run_
     }
 }
 
-/// Runtime trampoline for `transcribe_capabilities_init` — index 21 in
+/// Runtime trampoline for `transcribe_capabilities_init` — index 22 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_capabilities_init(out: *mut transcribe_capabilities) -> () {
-    match crate::dynload::fn_ptr(21) {
+    match crate::dynload::fn_ptr(22) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_capabilities) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -1458,11 +1473,11 @@ pub unsafe extern "C" fn transcribe_capabilities_init(out: *mut transcribe_capab
     }
 }
 
-/// Runtime trampoline for `transcribe_model_get_capabilities` — index 22 in
+/// Runtime trampoline for `transcribe_model_get_capabilities` — index 23 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_get_capabilities(model: *const transcribe_model, out_caps: *mut transcribe_capabilities) -> transcribe_status {
-    match crate::dynload::fn_ptr(22) {
+    match crate::dynload::fn_ptr(23) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model, *mut transcribe_capabilities) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model, out_caps) }
@@ -1471,11 +1486,11 @@ pub unsafe extern "C" fn transcribe_model_get_capabilities(model: *const transcr
     }
 }
 
-/// Runtime trampoline for `transcribe_model_supports` — index 23 in
+/// Runtime trampoline for `transcribe_model_supports` — index 24 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_supports(model: *const transcribe_model, feature: transcribe_feature) -> bool {
-    match crate::dynload::fn_ptr(23) {
+    match crate::dynload::fn_ptr(24) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model, transcribe_feature) -> bool = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model, feature) }
@@ -1484,23 +1499,10 @@ pub unsafe extern "C" fn transcribe_model_supports(model: *const transcribe_mode
     }
 }
 
-/// Runtime trampoline for `transcribe_model_arch_string` — index 24 in
+/// Runtime trampoline for `transcribe_model_arch_string` — index 25 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_arch_string(model: *const transcribe_model) -> *const ::std::os::raw::c_char {
-    match crate::dynload::fn_ptr(24) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_model) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(model) }
-        }
-        None => ::std::ptr::null(),
-    }
-}
-
-/// Runtime trampoline for `transcribe_model_variant_string` — index 25 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_model_variant_string(model: *const transcribe_model) -> *const ::std::os::raw::c_char {
     match crate::dynload::fn_ptr(25) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
@@ -1510,10 +1512,10 @@ pub unsafe extern "C" fn transcribe_model_variant_string(model: *const transcrib
     }
 }
 
-/// Runtime trampoline for `transcribe_model_backend` — index 26 in
+/// Runtime trampoline for `transcribe_model_variant_string` — index 26 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_model_backend(model: *const transcribe_model) -> *const ::std::os::raw::c_char {
+pub unsafe extern "C" fn transcribe_model_variant_string(model: *const transcribe_model) -> *const ::std::os::raw::c_char {
     match crate::dynload::fn_ptr(26) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
@@ -1523,11 +1525,24 @@ pub unsafe extern "C" fn transcribe_model_backend(model: *const transcribe_model
     }
 }
 
-/// Runtime trampoline for `transcribe_model_meta_val_str` — index 27 in
+/// Runtime trampoline for `transcribe_model_backend` — index 27 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_model_backend(model: *const transcribe_model) -> *const ::std::os::raw::c_char {
+    match crate::dynload::fn_ptr(27) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_model) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(model) }
+        }
+        None => ::std::ptr::null(),
+    }
+}
+
+/// Runtime trampoline for `transcribe_model_meta_val_str` — index 28 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_meta_val_str(model: *const transcribe_model, key: *const ::std::os::raw::c_char) -> *const ::std::os::raw::c_char {
-    match crate::dynload::fn_ptr(27) {
+    match crate::dynload::fn_ptr(28) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model, *const ::std::os::raw::c_char) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model, key) }
@@ -1536,11 +1551,11 @@ pub unsafe extern "C" fn transcribe_model_meta_val_str(model: *const transcribe_
     }
 }
 
-/// Runtime trampoline for `transcribe_model_load_file` — index 28 in
+/// Runtime trampoline for `transcribe_model_load_file` — index 29 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_load_file(path: *const ::std::os::raw::c_char, params: *const transcribe_model_load_params, out_model: *mut *mut transcribe_model) -> transcribe_status {
-    match crate::dynload::fn_ptr(28) {
+    match crate::dynload::fn_ptr(29) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const ::std::os::raw::c_char, *const transcribe_model_load_params, *mut *mut transcribe_model) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(path, params, out_model) }
@@ -1549,11 +1564,11 @@ pub unsafe extern "C" fn transcribe_model_load_file(path: *const ::std::os::raw:
     }
 }
 
-/// Runtime trampoline for `transcribe_model_free` — index 29 in
+/// Runtime trampoline for `transcribe_model_free` — index 30 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_model_free(model: *mut transcribe_model) -> () {
-    match crate::dynload::fn_ptr(29) {
+    match crate::dynload::fn_ptr(30) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_model) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model) }
@@ -1562,11 +1577,11 @@ pub unsafe extern "C" fn transcribe_model_free(model: *mut transcribe_model) -> 
     }
 }
 
-/// Runtime trampoline for `transcribe_session_init` — index 30 in
+/// Runtime trampoline for `transcribe_session_init` — index 31 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_session_init(model: *mut transcribe_model, params: *const transcribe_session_params, out_session: *mut *mut transcribe_session) -> transcribe_status {
-    match crate::dynload::fn_ptr(30) {
+    match crate::dynload::fn_ptr(31) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_model, *const transcribe_session_params, *mut *mut transcribe_session) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model, params, out_session) }
@@ -1575,11 +1590,11 @@ pub unsafe extern "C" fn transcribe_session_init(model: *mut transcribe_model, p
     }
 }
 
-/// Runtime trampoline for `transcribe_session_free` — index 31 in
+/// Runtime trampoline for `transcribe_session_free` — index 32 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_session_free(session: *mut transcribe_session) -> () {
-    match crate::dynload::fn_ptr(31) {
+    match crate::dynload::fn_ptr(32) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1588,11 +1603,11 @@ pub unsafe extern "C" fn transcribe_session_free(session: *mut transcribe_sessio
     }
 }
 
-/// Runtime trampoline for `transcribe_open` — index 32 in
+/// Runtime trampoline for `transcribe_open` — index 33 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_open(path: *const ::std::os::raw::c_char, load_params: *const transcribe_model_load_params, session_params: *const transcribe_session_params, out_session: *mut *mut transcribe_session) -> transcribe_status {
-    match crate::dynload::fn_ptr(32) {
+    match crate::dynload::fn_ptr(33) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const ::std::os::raw::c_char, *const transcribe_model_load_params, *const transcribe_session_params, *mut *mut transcribe_session) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(path, load_params, session_params, out_session) }
@@ -1601,11 +1616,11 @@ pub unsafe extern "C" fn transcribe_open(path: *const ::std::os::raw::c_char, lo
     }
 }
 
-/// Runtime trampoline for `transcribe_close` — index 33 in
+/// Runtime trampoline for `transcribe_close` — index 34 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_close(session: *mut transcribe_session) -> () {
-    match crate::dynload::fn_ptr(33) {
+    match crate::dynload::fn_ptr(34) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1614,11 +1629,11 @@ pub unsafe extern "C" fn transcribe_close(session: *mut transcribe_session) -> (
     }
 }
 
-/// Runtime trampoline for `transcribe_get_model` — index 34 in
+/// Runtime trampoline for `transcribe_get_model` — index 35 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_model(session: *const transcribe_session) -> *const transcribe_model {
-    match crate::dynload::fn_ptr(34) {
+    match crate::dynload::fn_ptr(35) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> *const transcribe_model = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1627,11 +1642,11 @@ pub unsafe extern "C" fn transcribe_get_model(session: *const transcribe_session
     }
 }
 
-/// Runtime trampoline for `transcribe_run` — index 35 in
+/// Runtime trampoline for `transcribe_run` — index 36 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_run(session: *mut transcribe_session, pcm: *const f32, n_samples: ::std::os::raw::c_int, params: *const transcribe_run_params) -> transcribe_status {
-    match crate::dynload::fn_ptr(35) {
+    match crate::dynload::fn_ptr(36) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, *const f32, ::std::os::raw::c_int, *const transcribe_run_params) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, pcm, n_samples, params) }
@@ -1640,11 +1655,11 @@ pub unsafe extern "C" fn transcribe_run(session: *mut transcribe_session, pcm: *
     }
 }
 
-/// Runtime trampoline for `transcribe_run_batch` — index 36 in
+/// Runtime trampoline for `transcribe_run_batch` — index 37 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_run_batch(session: *mut transcribe_session, pcm: *const *const f32, n_samples: *const ::std::os::raw::c_int, n: ::std::os::raw::c_int, params: *const transcribe_run_params) -> transcribe_status {
-    match crate::dynload::fn_ptr(36) {
+    match crate::dynload::fn_ptr(37) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, *const *const f32, *const ::std::os::raw::c_int, ::std::os::raw::c_int, *const transcribe_run_params) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, pcm, n_samples, n, params) }
@@ -1653,11 +1668,11 @@ pub unsafe extern "C" fn transcribe_run_batch(session: *mut transcribe_session, 
     }
 }
 
-/// Runtime trampoline for `transcribe_set_abort_callback` — index 37 in
+/// Runtime trampoline for `transcribe_set_abort_callback` — index 38 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_set_abort_callback(session: *mut transcribe_session, cb: transcribe_abort_callback, user_data: *mut ::std::os::raw::c_void) -> () {
-    match crate::dynload::fn_ptr(37) {
+    match crate::dynload::fn_ptr(38) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, transcribe_abort_callback, *mut ::std::os::raw::c_void) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, cb, user_data) }
@@ -1666,11 +1681,11 @@ pub unsafe extern "C" fn transcribe_set_abort_callback(session: *mut transcribe_
     }
 }
 
-/// Runtime trampoline for `transcribe_set_progress_callback` — index 38 in
+/// Runtime trampoline for `transcribe_set_progress_callback` — index 39 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_set_progress_callback(session: *mut transcribe_session, cb: transcribe_progress_callback, user_data: *mut ::std::os::raw::c_void) -> () {
-    match crate::dynload::fn_ptr(38) {
+    match crate::dynload::fn_ptr(39) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, transcribe_progress_callback, *mut ::std::os::raw::c_void) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, cb, user_data) }
@@ -1679,23 +1694,10 @@ pub unsafe extern "C" fn transcribe_set_progress_callback(session: *mut transcri
     }
 }
 
-/// Runtime trampoline for `transcribe_was_aborted` — index 39 in
+/// Runtime trampoline for `transcribe_was_aborted` — index 40 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_was_aborted(session: *const transcribe_session) -> bool {
-    match crate::dynload::fn_ptr(39) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session) -> bool = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session) }
-        }
-        None => false,
-    }
-}
-
-/// Runtime trampoline for `transcribe_was_truncated` — index 40 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_was_truncated(session: *const transcribe_session) -> bool {
     match crate::dynload::fn_ptr(40) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> bool = unsafe { ::std::mem::transmute(__ptr) };
@@ -1705,11 +1707,24 @@ pub unsafe extern "C" fn transcribe_was_truncated(session: *const transcribe_ses
     }
 }
 
-/// Runtime trampoline for `transcribe_session_limits_init` — index 41 in
+/// Runtime trampoline for `transcribe_was_truncated` — index 41 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_was_truncated(session: *const transcribe_session) -> bool {
+    match crate::dynload::fn_ptr(41) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session) -> bool = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session) }
+        }
+        None => false,
+    }
+}
+
+/// Runtime trampoline for `transcribe_session_limits_init` — index 42 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_session_limits_init(out: *mut transcribe_session_limits) -> () {
-    match crate::dynload::fn_ptr(41) {
+    match crate::dynload::fn_ptr(42) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session_limits) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -1718,11 +1733,11 @@ pub unsafe extern "C" fn transcribe_session_limits_init(out: *mut transcribe_ses
     }
 }
 
-/// Runtime trampoline for `transcribe_session_get_limits` — index 42 in
+/// Runtime trampoline for `transcribe_session_get_limits` — index 43 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_session_get_limits(session: *const transcribe_session, out: *mut transcribe_session_limits) -> transcribe_status {
-    match crate::dynload::fn_ptr(42) {
+    match crate::dynload::fn_ptr(43) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, *mut transcribe_session_limits) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, out) }
@@ -1731,11 +1746,11 @@ pub unsafe extern "C" fn transcribe_session_get_limits(session: *const transcrib
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_params_init` — index 43 in
+/// Runtime trampoline for `transcribe_stream_params_init` — index 44 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_params_init(params: *mut transcribe_stream_params) -> () {
-    match crate::dynload::fn_ptr(43) {
+    match crate::dynload::fn_ptr(44) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_stream_params) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(params) }
@@ -1744,11 +1759,11 @@ pub unsafe extern "C" fn transcribe_stream_params_init(params: *mut transcribe_s
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_update_init` — index 44 in
+/// Runtime trampoline for `transcribe_stream_update_init` — index 45 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_update_init(out: *mut transcribe_stream_update) -> () {
-    match crate::dynload::fn_ptr(44) {
+    match crate::dynload::fn_ptr(45) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_stream_update) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -1757,11 +1772,11 @@ pub unsafe extern "C" fn transcribe_stream_update_init(out: *mut transcribe_stre
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_text_init` — index 45 in
+/// Runtime trampoline for `transcribe_stream_text_init` — index 46 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_text_init(out: *mut transcribe_stream_text) -> () {
-    match crate::dynload::fn_ptr(45) {
+    match crate::dynload::fn_ptr(46) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_stream_text) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -1770,11 +1785,11 @@ pub unsafe extern "C" fn transcribe_stream_text_init(out: *mut transcribe_stream
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_get_text` — index 46 in
+/// Runtime trampoline for `transcribe_stream_get_text` — index 47 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_get_text(session: *const transcribe_session, out: *mut transcribe_stream_text) -> transcribe_status {
-    match crate::dynload::fn_ptr(46) {
+    match crate::dynload::fn_ptr(47) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, *mut transcribe_stream_text) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, out) }
@@ -1783,11 +1798,11 @@ pub unsafe extern "C" fn transcribe_stream_get_text(session: *const transcribe_s
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_begin` — index 47 in
+/// Runtime trampoline for `transcribe_stream_begin` — index 48 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_begin(session: *mut transcribe_session, run_params: *const transcribe_run_params, stream_params: *const transcribe_stream_params) -> transcribe_status {
-    match crate::dynload::fn_ptr(47) {
+    match crate::dynload::fn_ptr(48) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, *const transcribe_run_params, *const transcribe_stream_params) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, run_params, stream_params) }
@@ -1796,11 +1811,11 @@ pub unsafe extern "C" fn transcribe_stream_begin(session: *mut transcribe_sessio
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_feed` — index 48 in
+/// Runtime trampoline for `transcribe_stream_feed` — index 49 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_feed(session: *mut transcribe_session, pcm: *const f32, n_samples: ::std::os::raw::c_int, update: *mut transcribe_stream_update) -> transcribe_status {
-    match crate::dynload::fn_ptr(48) {
+    match crate::dynload::fn_ptr(49) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, *const f32, ::std::os::raw::c_int, *mut transcribe_stream_update) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, pcm, n_samples, update) }
@@ -1809,11 +1824,11 @@ pub unsafe extern "C" fn transcribe_stream_feed(session: *mut transcribe_session
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_finalize` — index 49 in
+/// Runtime trampoline for `transcribe_stream_finalize` — index 50 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_finalize(session: *mut transcribe_session, update: *mut transcribe_stream_update) -> transcribe_status {
-    match crate::dynload::fn_ptr(49) {
+    match crate::dynload::fn_ptr(50) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session, *mut transcribe_stream_update) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, update) }
@@ -1822,11 +1837,11 @@ pub unsafe extern "C" fn transcribe_stream_finalize(session: *mut transcribe_ses
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_reset` — index 50 in
+/// Runtime trampoline for `transcribe_stream_reset` — index 51 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_reset(session: *mut transcribe_session) -> () {
-    match crate::dynload::fn_ptr(50) {
+    match crate::dynload::fn_ptr(51) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1835,11 +1850,11 @@ pub unsafe extern "C" fn transcribe_stream_reset(session: *mut transcribe_sessio
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_get_state` — index 51 in
+/// Runtime trampoline for `transcribe_stream_get_state` — index 52 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_get_state(session: *const transcribe_session) -> transcribe_stream_state {
-    match crate::dynload::fn_ptr(51) {
+    match crate::dynload::fn_ptr(52) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> transcribe_stream_state = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1848,23 +1863,10 @@ pub unsafe extern "C" fn transcribe_stream_get_state(session: *const transcribe_
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_revision` — index 52 in
+/// Runtime trampoline for `transcribe_stream_revision` — index 53 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_revision(session: *const transcribe_session) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(52) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session) }
-        }
-        None => -1,
-    }
-}
-
-/// Runtime trampoline for `transcribe_stream_n_committed_segments` — index 53 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_stream_n_committed_segments(session: *const transcribe_session) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(53) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -1874,10 +1876,10 @@ pub unsafe extern "C" fn transcribe_stream_n_committed_segments(session: *const 
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_n_committed_words` — index 54 in
+/// Runtime trampoline for `transcribe_stream_n_committed_segments` — index 54 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_stream_n_committed_words(session: *const transcribe_session) -> ::std::os::raw::c_int {
+pub unsafe extern "C" fn transcribe_stream_n_committed_segments(session: *const transcribe_session) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(54) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -1887,10 +1889,10 @@ pub unsafe extern "C" fn transcribe_stream_n_committed_words(session: *const tra
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_n_committed_tokens` — index 55 in
+/// Runtime trampoline for `transcribe_stream_n_committed_words` — index 55 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_stream_n_committed_tokens(session: *const transcribe_session) -> ::std::os::raw::c_int {
+pub unsafe extern "C" fn transcribe_stream_n_committed_words(session: *const transcribe_session) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(55) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -1900,11 +1902,24 @@ pub unsafe extern "C" fn transcribe_stream_n_committed_tokens(session: *const tr
     }
 }
 
-/// Runtime trampoline for `transcribe_stream_last_status` — index 56 in
+/// Runtime trampoline for `transcribe_stream_n_committed_tokens` — index 56 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_stream_n_committed_tokens(session: *const transcribe_session) -> ::std::os::raw::c_int {
+    match crate::dynload::fn_ptr(56) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session) }
+        }
+        None => -1,
+    }
+}
+
+/// Runtime trampoline for `transcribe_stream_last_status` — index 57 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_stream_last_status(session: *const transcribe_session) -> transcribe_status {
-    match crate::dynload::fn_ptr(56) {
+    match crate::dynload::fn_ptr(57) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1913,11 +1928,11 @@ pub unsafe extern "C" fn transcribe_stream_last_status(session: *const transcrib
     }
 }
 
-/// Runtime trampoline for `transcribe_tokenize` — index 57 in
+/// Runtime trampoline for `transcribe_tokenize` — index 58 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_tokenize(model: *const transcribe_model, text: *const ::std::os::raw::c_char, tokens: *mut i32, n_max: usize) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(57) {
+    match crate::dynload::fn_ptr(58) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_model, *const ::std::os::raw::c_char, *mut i32, usize) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(model, text, tokens, n_max) }
@@ -1926,11 +1941,11 @@ pub unsafe extern "C" fn transcribe_tokenize(model: *const transcribe_model, tex
     }
 }
 
-/// Runtime trampoline for `transcribe_timings_init` — index 58 in
+/// Runtime trampoline for `transcribe_timings_init` — index 59 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_timings_init(out: *mut transcribe_timings) -> () {
-    match crate::dynload::fn_ptr(58) {
+    match crate::dynload::fn_ptr(59) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_timings) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -1939,11 +1954,11 @@ pub unsafe extern "C" fn transcribe_timings_init(out: *mut transcribe_timings) -
     }
 }
 
-/// Runtime trampoline for `transcribe_get_timings` — index 59 in
+/// Runtime trampoline for `transcribe_get_timings` — index 60 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_timings(session: *const transcribe_session, out_timings: *mut transcribe_timings) -> transcribe_status {
-    match crate::dynload::fn_ptr(59) {
+    match crate::dynload::fn_ptr(60) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, *mut transcribe_timings) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, out_timings) }
@@ -1952,11 +1967,11 @@ pub unsafe extern "C" fn transcribe_get_timings(session: *const transcribe_sessi
     }
 }
 
-/// Runtime trampoline for `transcribe_print_timings` — index 60 in
+/// Runtime trampoline for `transcribe_print_timings` — index 61 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_print_timings(session: *const transcribe_session) -> () {
-    match crate::dynload::fn_ptr(60) {
+    match crate::dynload::fn_ptr(61) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1965,11 +1980,11 @@ pub unsafe extern "C" fn transcribe_print_timings(session: *const transcribe_ses
     }
 }
 
-/// Runtime trampoline for `transcribe_reset_timings` — index 61 in
+/// Runtime trampoline for `transcribe_reset_timings` — index 62 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_reset_timings(session: *mut transcribe_session) -> () {
-    match crate::dynload::fn_ptr(61) {
+    match crate::dynload::fn_ptr(62) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_session) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -1978,23 +1993,10 @@ pub unsafe extern "C" fn transcribe_reset_timings(session: *mut transcribe_sessi
     }
 }
 
-/// Runtime trampoline for `transcribe_full_text` — index 62 in
+/// Runtime trampoline for `transcribe_full_text` — index 63 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_full_text(session: *const transcribe_session) -> *const ::std::os::raw::c_char {
-    match crate::dynload::fn_ptr(62) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session) }
-        }
-        None => ::std::ptr::null(),
-    }
-}
-
-/// Runtime trampoline for `transcribe_raw_text` — index 63 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_raw_text(session: *const transcribe_session) -> *const ::std::os::raw::c_char {
     match crate::dynload::fn_ptr(63) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
@@ -2004,11 +2006,24 @@ pub unsafe extern "C" fn transcribe_raw_text(session: *const transcribe_session)
     }
 }
 
-/// Runtime trampoline for `transcribe_returned_timestamp_kind` — index 64 in
+/// Runtime trampoline for `transcribe_raw_text` — index 64 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_raw_text(session: *const transcribe_session) -> *const ::std::os::raw::c_char {
+    match crate::dynload::fn_ptr(64) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session) }
+        }
+        None => ::std::ptr::null(),
+    }
+}
+
+/// Runtime trampoline for `transcribe_returned_timestamp_kind` — index 65 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_returned_timestamp_kind(session: *const transcribe_session) -> transcribe_timestamp_kind {
-    match crate::dynload::fn_ptr(64) {
+    match crate::dynload::fn_ptr(65) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> transcribe_timestamp_kind = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -2017,23 +2032,10 @@ pub unsafe extern "C" fn transcribe_returned_timestamp_kind(session: *const tran
     }
 }
 
-/// Runtime trampoline for `transcribe_n_segments` — index 65 in
+/// Runtime trampoline for `transcribe_n_segments` — index 66 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_n_segments(session: *const transcribe_session) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(65) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session) }
-        }
-        None => -1,
-    }
-}
-
-/// Runtime trampoline for `transcribe_n_words` — index 66 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_n_words(session: *const transcribe_session) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(66) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -2043,10 +2045,10 @@ pub unsafe extern "C" fn transcribe_n_words(session: *const transcribe_session) 
     }
 }
 
-/// Runtime trampoline for `transcribe_n_tokens` — index 67 in
+/// Runtime trampoline for `transcribe_n_words` — index 67 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_n_tokens(session: *const transcribe_session) -> ::std::os::raw::c_int {
+pub unsafe extern "C" fn transcribe_n_words(session: *const transcribe_session) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(67) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -2056,11 +2058,24 @@ pub unsafe extern "C" fn transcribe_n_tokens(session: *const transcribe_session)
     }
 }
 
-/// Runtime trampoline for `transcribe_detected_language` — index 68 in
+/// Runtime trampoline for `transcribe_n_tokens` — index 68 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_n_tokens(session: *const transcribe_session) -> ::std::os::raw::c_int {
+    match crate::dynload::fn_ptr(68) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session) }
+        }
+        None => -1,
+    }
+}
+
+/// Runtime trampoline for `transcribe_detected_language` — index 69 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_detected_language(session: *const transcribe_session) -> *const ::std::os::raw::c_char {
-    match crate::dynload::fn_ptr(68) {
+    match crate::dynload::fn_ptr(69) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -2069,11 +2084,11 @@ pub unsafe extern "C" fn transcribe_detected_language(session: *const transcribe
     }
 }
 
-/// Runtime trampoline for `transcribe_segment_init` — index 69 in
+/// Runtime trampoline for `transcribe_segment_init` — index 70 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_segment_init(out: *mut transcribe_segment) -> () {
-    match crate::dynload::fn_ptr(69) {
+    match crate::dynload::fn_ptr(70) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_segment) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -2082,11 +2097,11 @@ pub unsafe extern "C" fn transcribe_segment_init(out: *mut transcribe_segment) -
     }
 }
 
-/// Runtime trampoline for `transcribe_word_init` — index 70 in
+/// Runtime trampoline for `transcribe_word_init` — index 71 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_word_init(out: *mut transcribe_word) -> () {
-    match crate::dynload::fn_ptr(70) {
+    match crate::dynload::fn_ptr(71) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_word) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -2095,11 +2110,11 @@ pub unsafe extern "C" fn transcribe_word_init(out: *mut transcribe_word) -> () {
     }
 }
 
-/// Runtime trampoline for `transcribe_token_init` — index 71 in
+/// Runtime trampoline for `transcribe_token_init` — index 72 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_token_init(out: *mut transcribe_token) -> () {
-    match crate::dynload::fn_ptr(71) {
+    match crate::dynload::fn_ptr(72) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_token) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -2108,11 +2123,11 @@ pub unsafe extern "C" fn transcribe_token_init(out: *mut transcribe_token) -> ()
     }
 }
 
-/// Runtime trampoline for `transcribe_get_segment` — index 72 in
+/// Runtime trampoline for `transcribe_get_segment` — index 73 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_segment(session: *const transcribe_session, i: ::std::os::raw::c_int, out: *mut transcribe_segment) -> transcribe_status {
-    match crate::dynload::fn_ptr(72) {
+    match crate::dynload::fn_ptr(73) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_segment) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out) }
@@ -2121,11 +2136,11 @@ pub unsafe extern "C" fn transcribe_get_segment(session: *const transcribe_sessi
     }
 }
 
-/// Runtime trampoline for `transcribe_get_word` — index 73 in
+/// Runtime trampoline for `transcribe_get_word` — index 74 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_word(session: *const transcribe_session, i: ::std::os::raw::c_int, out: *mut transcribe_word) -> transcribe_status {
-    match crate::dynload::fn_ptr(73) {
+    match crate::dynload::fn_ptr(74) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_word) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out) }
@@ -2134,11 +2149,11 @@ pub unsafe extern "C" fn transcribe_get_word(session: *const transcribe_session,
     }
 }
 
-/// Runtime trampoline for `transcribe_get_token` — index 74 in
+/// Runtime trampoline for `transcribe_get_token` — index 75 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_token(session: *const transcribe_session, i: ::std::os::raw::c_int, out: *mut transcribe_token) -> transcribe_status {
-    match crate::dynload::fn_ptr(74) {
+    match crate::dynload::fn_ptr(75) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_token) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out) }
@@ -2147,11 +2162,11 @@ pub unsafe extern "C" fn transcribe_get_token(session: *const transcribe_session
     }
 }
 
-/// Runtime trampoline for `transcribe_speaker_segment_init` — index 75 in
+/// Runtime trampoline for `transcribe_speaker_segment_init` — index 76 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_speaker_segment_init(out: *mut transcribe_speaker_segment) -> () {
-    match crate::dynload::fn_ptr(75) {
+    match crate::dynload::fn_ptr(76) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_speaker_segment) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -2160,11 +2175,11 @@ pub unsafe extern "C" fn transcribe_speaker_segment_init(out: *mut transcribe_sp
     }
 }
 
-/// Runtime trampoline for `transcribe_n_speaker_segments` — index 76 in
+/// Runtime trampoline for `transcribe_n_speaker_segments` — index 77 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_n_speaker_segments(session: *const transcribe_session) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(76) {
+    match crate::dynload::fn_ptr(77) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -2173,11 +2188,11 @@ pub unsafe extern "C" fn transcribe_n_speaker_segments(session: *const transcrib
     }
 }
 
-/// Runtime trampoline for `transcribe_get_speaker_segment` — index 77 in
+/// Runtime trampoline for `transcribe_get_speaker_segment` — index 78 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_speaker_segment(session: *const transcribe_session, i: ::std::os::raw::c_int, out: *mut transcribe_speaker_segment) -> transcribe_status {
-    match crate::dynload::fn_ptr(77) {
+    match crate::dynload::fn_ptr(78) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_speaker_segment) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out) }
@@ -2186,11 +2201,11 @@ pub unsafe extern "C" fn transcribe_get_speaker_segment(session: *const transcri
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_n_results` — index 78 in
+/// Runtime trampoline for `transcribe_batch_n_results` — index 79 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_batch_n_results(session: *const transcribe_session) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(78) {
+    match crate::dynload::fn_ptr(79) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -2199,11 +2214,11 @@ pub unsafe extern "C" fn transcribe_batch_n_results(session: *const transcribe_s
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_status` — index 79 in
+/// Runtime trampoline for `transcribe_batch_status` — index 80 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_batch_status(session: *const transcribe_session, i: ::std::os::raw::c_int) -> transcribe_status {
-    match crate::dynload::fn_ptr(79) {
+    match crate::dynload::fn_ptr(80) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i) }
@@ -2212,23 +2227,10 @@ pub unsafe extern "C" fn transcribe_batch_status(session: *const transcribe_sess
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_full_text` — index 80 in
+/// Runtime trampoline for `transcribe_batch_full_text` — index 81 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_batch_full_text(session: *const transcribe_session, i: ::std::os::raw::c_int) -> *const ::std::os::raw::c_char {
-    match crate::dynload::fn_ptr(80) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session, i) }
-        }
-        None => ::std::ptr::null(),
-    }
-}
-
-/// Runtime trampoline for `transcribe_batch_raw_text` — index 81 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_raw_text(session: *const transcribe_session, i: ::std::os::raw::c_int) -> *const ::std::os::raw::c_char {
     match crate::dynload::fn_ptr(81) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
@@ -2238,24 +2240,11 @@ pub unsafe extern "C" fn transcribe_batch_raw_text(session: *const transcribe_se
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_returned_timestamp_kind` — index 82 in
+/// Runtime trampoline for `transcribe_batch_raw_text` — index 82 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_returned_timestamp_kind(session: *const transcribe_session, i: ::std::os::raw::c_int) -> transcribe_timestamp_kind {
+pub unsafe extern "C" fn transcribe_batch_raw_text(session: *const transcribe_session, i: ::std::os::raw::c_int) -> *const ::std::os::raw::c_char {
     match crate::dynload::fn_ptr(82) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> transcribe_timestamp_kind = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session, i) }
-        }
-        None => transcribe_timestamp_kind(0),
-    }
-}
-
-/// Runtime trampoline for `transcribe_batch_detected_language` — index 83 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_detected_language(session: *const transcribe_session, i: ::std::os::raw::c_int) -> *const ::std::os::raw::c_char {
-    match crate::dynload::fn_ptr(83) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i) }
@@ -2264,23 +2253,36 @@ pub unsafe extern "C" fn transcribe_batch_detected_language(session: *const tran
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_n_segments` — index 84 in
+/// Runtime trampoline for `transcribe_batch_returned_timestamp_kind` — index 83 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_n_segments(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(84) {
+pub unsafe extern "C" fn transcribe_batch_returned_timestamp_kind(session: *const transcribe_session, i: ::std::os::raw::c_int) -> transcribe_timestamp_kind {
+    match crate::dynload::fn_ptr(83) {
         Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> transcribe_timestamp_kind = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i) }
         }
-        None => -1,
+        None => transcribe_timestamp_kind(0),
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_n_words` — index 85 in
+/// Runtime trampoline for `transcribe_batch_detected_language` — index 84 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_n_words(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+pub unsafe extern "C" fn transcribe_batch_detected_language(session: *const transcribe_session, i: ::std::os::raw::c_int) -> *const ::std::os::raw::c_char {
+    match crate::dynload::fn_ptr(84) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> *const ::std::os::raw::c_char = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session, i) }
+        }
+        None => ::std::ptr::null(),
+    }
+}
+
+/// Runtime trampoline for `transcribe_batch_n_segments` — index 85 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_batch_n_segments(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(85) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -2290,10 +2292,10 @@ pub unsafe extern "C" fn transcribe_batch_n_words(session: *const transcribe_ses
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_n_tokens` — index 86 in
+/// Runtime trampoline for `transcribe_batch_n_words` — index 86 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_n_tokens(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+pub unsafe extern "C" fn transcribe_batch_n_words(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(86) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
@@ -2303,50 +2305,11 @@ pub unsafe extern "C" fn transcribe_batch_n_tokens(session: *const transcribe_se
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_get_segment` — index 87 in
+/// Runtime trampoline for `transcribe_batch_n_tokens` — index 87 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_get_segment(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_segment) -> transcribe_status {
+pub unsafe extern "C" fn transcribe_batch_n_tokens(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(87) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_segment) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session, i, j, out) }
-        }
-        None => transcribe_status(8),
-    }
-}
-
-/// Runtime trampoline for `transcribe_batch_get_word` — index 88 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_get_word(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_word) -> transcribe_status {
-    match crate::dynload::fn_ptr(88) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_word) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session, i, j, out) }
-        }
-        None => transcribe_status(8),
-    }
-}
-
-/// Runtime trampoline for `transcribe_batch_get_token` — index 89 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_get_token(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_token) -> transcribe_status {
-    match crate::dynload::fn_ptr(89) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_token) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(session, i, j, out) }
-        }
-        None => transcribe_status(8),
-    }
-}
-
-/// Runtime trampoline for `transcribe_batch_n_speaker_segments` — index 90 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_batch_n_speaker_segments(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(90) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i) }
@@ -2355,11 +2318,63 @@ pub unsafe extern "C" fn transcribe_batch_n_speaker_segments(session: *const tra
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_get_speaker_segment` — index 91 in
+/// Runtime trampoline for `transcribe_batch_get_segment` — index 88 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_batch_get_segment(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_segment) -> transcribe_status {
+    match crate::dynload::fn_ptr(88) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_segment) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session, i, j, out) }
+        }
+        None => transcribe_status(8),
+    }
+}
+
+/// Runtime trampoline for `transcribe_batch_get_word` — index 89 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_batch_get_word(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_word) -> transcribe_status {
+    match crate::dynload::fn_ptr(89) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_word) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session, i, j, out) }
+        }
+        None => transcribe_status(8),
+    }
+}
+
+/// Runtime trampoline for `transcribe_batch_get_token` — index 90 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_batch_get_token(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_token) -> transcribe_status {
+    match crate::dynload::fn_ptr(90) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_token) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session, i, j, out) }
+        }
+        None => transcribe_status(8),
+    }
+}
+
+/// Runtime trampoline for `transcribe_batch_n_speaker_segments` — index 91 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_batch_n_speaker_segments(session: *const transcribe_session, i: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+    match crate::dynload::fn_ptr(91) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session, i) }
+        }
+        None => -1,
+    }
+}
+
+/// Runtime trampoline for `transcribe_batch_get_speaker_segment` — index 92 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_batch_get_speaker_segment(session: *const transcribe_session, i: ::std::os::raw::c_int, j: ::std::os::raw::c_int, out: *mut transcribe_speaker_segment) -> transcribe_status {
-    match crate::dynload::fn_ptr(91) {
+    match crate::dynload::fn_ptr(92) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, ::std::os::raw::c_int, *mut transcribe_speaker_segment) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, j, out) }
@@ -2368,11 +2383,11 @@ pub unsafe extern "C" fn transcribe_batch_get_speaker_segment(session: *const tr
     }
 }
 
-/// Runtime trampoline for `transcribe_batch_get_timings` — index 92 in
+/// Runtime trampoline for `transcribe_batch_get_timings` — index 93 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_batch_get_timings(session: *const transcribe_session, i: ::std::os::raw::c_int, out: *mut transcribe_timings) -> transcribe_status {
-    match crate::dynload::fn_ptr(92) {
+    match crate::dynload::fn_ptr(93) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_timings) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out) }
@@ -2381,11 +2396,11 @@ pub unsafe extern "C" fn transcribe_batch_get_timings(session: *const transcribe
     }
 }
 
-/// Runtime trampoline for `transcribe_moonshine_streaming_stream_ext_init` — index 93 in
+/// Runtime trampoline for `transcribe_moonshine_streaming_stream_ext_init` — index 94 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_moonshine_streaming_stream_ext_init(ext: *mut transcribe_moonshine_streaming_stream_ext) -> () {
-    match crate::dynload::fn_ptr(93) {
+    match crate::dynload::fn_ptr(94) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_moonshine_streaming_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
@@ -2394,11 +2409,11 @@ pub unsafe extern "C" fn transcribe_moonshine_streaming_stream_ext_init(ext: *mu
     }
 }
 
-/// Runtime trampoline for `transcribe_parakeet_stream_ext_init` — index 94 in
+/// Runtime trampoline for `transcribe_parakeet_stream_ext_init` — index 95 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_parakeet_stream_ext_init(ext: *mut transcribe_parakeet_stream_ext) -> () {
-    match crate::dynload::fn_ptr(94) {
+    match crate::dynload::fn_ptr(95) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_parakeet_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
@@ -2407,11 +2422,11 @@ pub unsafe extern "C" fn transcribe_parakeet_stream_ext_init(ext: *mut transcrib
     }
 }
 
-/// Runtime trampoline for `transcribe_parakeet_buffered_stream_ext_init` — index 95 in
+/// Runtime trampoline for `transcribe_parakeet_buffered_stream_ext_init` — index 96 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_parakeet_buffered_stream_ext_init(ext: *mut transcribe_parakeet_buffered_stream_ext) -> () {
-    match crate::dynload::fn_ptr(95) {
+    match crate::dynload::fn_ptr(96) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_parakeet_buffered_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
@@ -2420,11 +2435,11 @@ pub unsafe extern "C" fn transcribe_parakeet_buffered_stream_ext_init(ext: *mut 
     }
 }
 
-/// Runtime trampoline for `transcribe_sortformer_stream_ext_init` — index 96 in
+/// Runtime trampoline for `transcribe_sortformer_stream_ext_init` — index 97 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_sortformer_stream_ext_init(ext: *mut transcribe_sortformer_stream_ext) -> () {
-    match crate::dynload::fn_ptr(96) {
+    match crate::dynload::fn_ptr(97) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_sortformer_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
@@ -2433,11 +2448,11 @@ pub unsafe extern "C" fn transcribe_sortformer_stream_ext_init(ext: *mut transcr
     }
 }
 
-/// Runtime trampoline for `transcribe_voxtral_realtime_stream_ext_init` — index 97 in
+/// Runtime trampoline for `transcribe_voxtral_realtime_stream_ext_init` — index 98 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_voxtral_realtime_stream_ext_init(ext: *mut transcribe_voxtral_realtime_stream_ext) -> () {
-    match crate::dynload::fn_ptr(97) {
+    match crate::dynload::fn_ptr(98) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_voxtral_realtime_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
@@ -2446,11 +2461,11 @@ pub unsafe extern "C" fn transcribe_voxtral_realtime_stream_ext_init(ext: *mut t
     }
 }
 
-/// Runtime trampoline for `transcribe_whisper_run_ext_init` — index 98 in
+/// Runtime trampoline for `transcribe_whisper_run_ext_init` — index 99 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_whisper_run_ext_init(ext: *mut transcribe_whisper_run_ext) -> () {
-    match crate::dynload::fn_ptr(98) {
+    match crate::dynload::fn_ptr(99) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_whisper_run_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
@@ -2459,11 +2474,11 @@ pub unsafe extern "C" fn transcribe_whisper_run_ext_init(ext: *mut transcribe_wh
     }
 }
 
-/// Runtime trampoline for `transcribe_whisper_chunk_trace_init` — index 99 in
+/// Runtime trampoline for `transcribe_whisper_chunk_trace_init` — index 100 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_whisper_chunk_trace_init(out: *mut transcribe_whisper_chunk_trace) -> () {
-    match crate::dynload::fn_ptr(99) {
+    match crate::dynload::fn_ptr(100) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*mut transcribe_whisper_chunk_trace) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(out) }
@@ -2472,11 +2487,11 @@ pub unsafe extern "C" fn transcribe_whisper_chunk_trace_init(out: *mut transcrib
     }
 }
 
-/// Runtime trampoline for `transcribe_get_whisper_chunk_count` — index 100 in
+/// Runtime trampoline for `transcribe_get_whisper_chunk_count` — index 101 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_whisper_chunk_count(session: *const transcribe_session) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(100) {
+    match crate::dynload::fn_ptr(101) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -2485,11 +2500,11 @@ pub unsafe extern "C" fn transcribe_get_whisper_chunk_count(session: *const tran
     }
 }
 
-/// Runtime trampoline for `transcribe_get_whisper_chunk_trace` — index 101 in
+/// Runtime trampoline for `transcribe_get_whisper_chunk_trace` — index 102 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_whisper_chunk_trace(session: *const transcribe_session, i: ::std::os::raw::c_int, out_trace: *mut transcribe_whisper_chunk_trace) -> transcribe_status {
-    match crate::dynload::fn_ptr(101) {
+    match crate::dynload::fn_ptr(102) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_whisper_chunk_trace) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out_trace) }
