@@ -127,6 +127,12 @@ jobs:
           key: capi-linux-${{ matrix.config.artifact_suffix }}
           update-package-index: true
 
+      # GGML_NATIVE=OFF: pin the CPU baseline to AVX2 instead of probing the
+      # BUILD machine (-march=native here, /arch:AVX512 via FindSIMD on the
+      # MSVC lanes). The runners' AVX-512-capable Xeons otherwise bake AVX-512
+      # into the single, non-dispatched ggml-cpu build — the artifact then
+      # SIGILLs (0xC000001D) on any deploy CPU without AVX-512 (observed:
+      # Core Ultra 9 185H crashing at model load, qwen3-asr weights path).
       - name: Configure
         run: |
           # Source oneAPI env if present AND not already loaded (the SYCL
@@ -137,6 +143,7 @@ jobs:
           mkdir -p build
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
@@ -350,6 +357,13 @@ jobs:
             exit 1
           }
 
+      # GGML_NATIVE=OFF on every capi lane (CUDA below, Vulkan/ROCm/SYCL after
+      # it): FindSIMD.cmake probes the BUILD machine and the AVX-512-capable
+      # runners bake /arch:AVX512 into the single ggml-cpu build
+      # (GGML_CPU_ALL_VARIANTS=OFF, no runtime dispatch) — shipped dlls then
+      # SIGILL (0xC000001D) on deploy CPUs without AVX-512 (Meteor Lake,
+      # 12th-gen+ client Intel; observed twice at a fixed RVA on 0.2.2).
+      # AVX2 floor is safe on every x86-64 CPU since Haswell.
       - name: Configure (CUDA)
         if: matrix.config.setup == 'cuda'
         shell: cmd
@@ -357,6 +371,7 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_NATIVE=OFF ^
             -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
             -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache ^
@@ -377,6 +392,7 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_NATIVE=OFF ^
             -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
             -DBUILD_SHARED_LIBS=ON ^
@@ -401,6 +417,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
             -DCMAKE_HIP_COMPILER_LAUNCHER=ccache `
             -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_NATIVE=OFF `
             -DBUILD_SHARED_LIBS=ON `
             -DTRANSCRIBE_SHARED_EMBED=ON `
             -DTRANSCRIBE_INSTALL=ON `
@@ -419,6 +436,7 @@ jobs:
           call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
           cmake -S . -B build -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_NATIVE=OFF ^
             -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
             -DCMAKE_C_COMPILER=cl ^
