@@ -56,18 +56,6 @@ static_assert(std::is_base_of_v<transcribe_model, ParakeetModel>);
 static_assert(std::is_base_of_v<transcribe_session, ParakeetSession>);
 
 ParakeetSession::~ParakeetSession() {
-    // Tear down per-call compute state before the model's backend plan
-    // (which outlives the context): scheduler, then context.
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-    encoder_out = nullptr;
-
     // Streaming cache tensors live in their own ggml_context + backend
     // buffer. Free buffer first (may hold a backend ref), then the ctx.
     if (stream_caches.buffer != nullptr) {
@@ -94,6 +82,11 @@ ParakeetSession::~ParakeetSession() {
     stream_caches.last_k.clear();
     stream_caches.last_v.clear();
     stream_caches.initialized = false;
+}
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void ParakeetSession::on_scratch_released() noexcept {
+    encoder_out = nullptr;
 }
 
 ParakeetModel::~ParakeetModel() {
