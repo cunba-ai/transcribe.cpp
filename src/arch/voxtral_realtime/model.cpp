@@ -61,14 +61,6 @@ Session::~Session() {
         ggml_free(ada_ctx);
         ada_ctx = nullptr;
     }
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 Model::~Model() {
