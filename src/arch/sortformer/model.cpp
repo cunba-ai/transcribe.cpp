@@ -1327,6 +1327,12 @@ void decode_stream_turns(const std::vector<float> &                             
 // trim's feat_len equivalent). close_open marks runs still active at the
 // edge as final (finalize: the edge is the end of audio, so trailing
 // turns close exactly as the offline extractor closes them at T).
+//
+// Full re-decode per window is O(T^2) over a stream, with a small
+// constant: the run extraction is one threshold pass over [T, 4] floats
+// (a 766 s stream reaches T ~ 9.6k frames, ~38k float compares per
+// refresh), dwarfed by the per-window graph. Measured: 766 s x 767 feeds
+// at 1 s spends an unmeasurable share of its 17 s total in this decode.
 void push_refresh_rows(SortformerSession * pc,
                        SortformerModel *   pm,
                        int64_t             mel_bound,
@@ -1371,8 +1377,27 @@ void push_refresh_rows(SortformerSession * pc,
 static transcribe_status push_stream_validate(const transcribe_session *       session,
                                               const transcribe_run_params *    run_params,
                                               const transcribe_stream_params * stream_params) {
-    (void) session;
     (void) run_params;
+    // Frontend preflight: the push path's incremental mel is the
+    // constant-pad / normalize=none / no-log-clamp combination (see
+    // MelFrontend::compute_frames). Reject an incompatible frontend KV
+    // here, pre-clear, so a GGUF that decodes fine offline cannot begin a
+    // stream and only fail at the first feed.
+    if (session != nullptr && session->model != nullptr) {
+        const auto * pm = static_cast<const SortformerModel *>(session->model);
+        if (pm == nullptr || !pm->mel.has_value()) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        const transcribe::MelConfig & cfg = pm->mel->config();
+        if (cfg.pad_mode != "constant" || cfg.normalize != "none" || cfg.log_clamp_min != 0.0f) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "sortformer: push-audio streaming requires pad_mode=constant, normalize=none "
+                    "and no log_clamp_min (got pad_mode=%s, normalize=%s, log_clamp_min=%g); "
+                    "use transcribe_run for this frontend",
+                    cfg.pad_mode.c_str(), cfg.normalize.c_str(), static_cast<double>(cfg.log_clamp_min));
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
     if (stream_params == nullptr || stream_params->family == nullptr) {
         return TRANSCRIBE_OK;  // NULL ext -> family defaults
     }
@@ -1551,8 +1576,8 @@ static transcribe_status push_stream_finalize(transcribe_session * session, tran
     }
     push_trim_mel(pc);
 
+    // close_open already drained every trailing turn into the committed set.
     push_refresh_rows(pc, pm, feat_len, /*close_open=*/true, changed);
-    ps.tentative.clear();  // every open turn closed at the final timestamp
     ps.active = false;
 
     pc->stream_audio_committed_us = ps.stt * ps.hop * 1000000 / static_cast<int64_t>(pm->hparams.fe_sample_rate);

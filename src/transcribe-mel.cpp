@@ -882,9 +882,12 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         first_sample > static_cast<int64_t>(total_stream_samples)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    if (cfg_.pad_mode != "constant" || cfg_.normalize != "none") {
-        // Reflect padding and cross-frame normalization are not causal /
-        // per-frame computable; compute() is the only supported path there.
+    if (cfg_.pad_mode != "constant" || cfg_.normalize != "none" || cfg_.log_clamp_min != 0.0f) {
+        // Reflect padding, cross-frame normalization, and the LASR/MedASR
+        // log floor-clamp are not expressible per frame (or compute() applies
+        // them over the whole buffer); compute() is the only supported path
+        // there. Adding a mode here requires keeping it bit-identical to the
+        // matching compute() branch.
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (n_frames < 0 || frame_begin < 0) {

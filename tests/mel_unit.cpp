@@ -17,9 +17,11 @@
 
 #include "transcribe-mel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -204,12 +206,198 @@ void test_n_frames_for() {
     CHECK(mf.n_frames_for(0) == 1);
 }
 
+// ---- compute_frames: incremental streaming equivalence -----------------
+//
+// The sortformer push-audio session computes mel incrementally through
+// MelFrontend::compute_frames with a trimmed sample tail; the offline path
+// uses whole-buffer compute(). On the no-BLAS scalar build the two must be
+// BIT-identical per frame (the review gate for the streaming path). These
+// tests pin that contract model-independently, plus the reject paths that
+// keep a future frontend knob from silently diverging mid-stream.
+
+// Sortformer-style streaming frontend: zero pad, no normalization, NeMo
+// ceil frame semantics (the per-frame-independent combination).
+transcribe::MelConfig stream_config() {
+    transcribe::MelConfig cfg = parakeet_config();
+    cfg.pad_mode              = "constant";
+    cfg.normalize             = "none";
+    cfg.nemo_seq_len_ceil     = true;
+    return cfg;
+}
+
+// Deterministic pseudo-noise in about [-1, 1).
+std::vector<float> pseudo_noise(size_t n, unsigned int seed) {
+    std::vector<float> pcm(n);
+    unsigned int       rng = seed;
+    for (size_t i = 0; i < n; ++i) {
+        rng    = rng * 1664525u + 1013904223u;
+        pcm[i] = static_cast<float>(rng >> 8) / 8388608.0f - 1.0f;
+    }
+    return pcm;
+}
+
+// Stream `pcm` through compute_frames in `feed`-sample steps under the
+// push session's exact tail policy (frame t computable once
+// t*hop + pad samples have arrived; tail trimmed to the next frame's
+// window minus one pre-emphasis overlap sample; trailing masked frame
+// appended as zeros at finalize). Returns the assembled [n_mels, T]
+// row-major matrix (one column per frame), matching compute()'s layout.
+std::vector<float> stream_mel(const transcribe::MelFrontend & mf, const std::vector<float> & pcm, size_t feed) {
+    const int          hop    = mf.config().hop_length;
+    const int          pad    = mf.config().n_fft / 2;
+    const int          n_mels = mf.num_mels();
+    std::vector<float> tail;
+    int64_t            tail_start = 0;
+    int64_t            total      = 0;
+    int64_t            computed   = 0;
+
+    // Per-call frames in compute()'s [n_mels, n_call] layout, with the
+    // absolute frame index each call starts at.
+    std::vector<std::pair<int64_t, std::vector<float>>> blocks;
+    auto                                                run_frames = [&](int64_t begin, int n) {
+        std::vector<float> frames;
+        int                nm = 0;
+        CHECK(mf.compute_frames(tail.data(), tail.size(), tail_start, total, begin, n, frames, nm) == TRANSCRIBE_OK);
+        blocks.emplace_back(begin, std::move(frames));
+        computed = begin + n;
+    };
+
+    for (size_t off = 0; off < pcm.size(); off += feed) {
+        const size_t n = std::min(feed, pcm.size() - off);
+        tail.insert(tail.end(), pcm.begin() + static_cast<std::ptrdiff_t>(off),
+                    pcm.begin() + static_cast<std::ptrdiff_t>(off + n));
+        total += static_cast<int64_t>(n);
+        // Frame t is fully supported once t*hop + pad samples have arrived.
+        const int64_t ready = total >= pad ? (total - pad) / hop + 1 : 0;
+        if (ready > computed) {
+            run_frames(computed, static_cast<int>(ready - computed));
+            // Trim to the next frame's window (plus one pre-emphasis
+            // overlap sample) exactly like the session.
+            const int64_t need_lo = std::max<int64_t>(0, computed * hop - pad - (computed > 0 ? 1 : 0));
+            if (need_lo > tail_start) {
+                const size_t drop =
+                    static_cast<size_t>(std::min<int64_t>(need_lo - tail_start, static_cast<int64_t>(tail.size())));
+                tail.erase(tail.begin(), tail.begin() + static_cast<std::ptrdiff_t>(drop));
+                tail_start += static_cast<int64_t>(drop);
+            }
+        }
+    }
+
+    // Finalize: remaining real frames, then the trailing zero mask.
+    const int64_t n_frames_total = mf.n_frames_for(static_cast<size_t>(total));
+    const int64_t real_frames    = total / hop;
+    if (real_frames > computed) {
+        run_frames(computed, static_cast<int>(real_frames - computed));
+    }
+    if (n_frames_total > computed) {
+        // The masked trailing frame(s) compute() zeroes out.
+        blocks.emplace_back(
+            computed,
+            std::vector<float>(static_cast<size_t>(n_frames_total - computed) * static_cast<size_t>(n_mels), 0.0f));
+        computed = n_frames_total;
+    }
+
+    // Assemble the per-call blocks into one [n_mels, T] matrix.
+    std::vector<float> out(static_cast<size_t>(n_mels) * static_cast<size_t>(computed), 0.0f);
+    for (const auto & [begin, frames] : blocks) {
+        const size_t n = frames.size() / static_cast<size_t>(n_mels);
+        for (int m = 0; m < n_mels; ++m) {
+            for (size_t i = 0; i < n; ++i) {
+                out[static_cast<size_t>(m) * static_cast<size_t>(computed) + static_cast<size_t>(begin) + i] =
+                    frames[static_cast<size_t>(m) * n + i];
+            }
+        }
+    }
+    return out;
+}
+
+void test_compute_frames_matches_compute() {
+    transcribe::MelFrontend mf(stream_config());
+    // Lengths exercise: exact hop multiple, hop remainder (masked trailing
+    // frame), and a short clip.
+    const size_t            lengths[] = { 38400, 38401, 20000 };
+    const size_t            feeds[]   = { 16000, 7680, 3333 };
+    for (const size_t n : lengths) {
+        const std::vector<float> pcm = pseudo_noise(n, 12345u + static_cast<unsigned int>(n));
+        std::vector<float>       whole;
+        int                      nm = 0, n_frames = 0;
+        CHECK(mf.compute(pcm.data(), pcm.size(), whole, nm, n_frames) == TRANSCRIBE_OK);
+        for (const size_t feed : feeds) {
+            const std::vector<float> streamed = stream_mel(mf, pcm, feed);
+            if (streamed.size() != whole.size()) {
+                std::fprintf(stderr, "FAIL %s:%d: n=%zu feed=%zu: %zu floats vs %zu\n", __FILE__, __LINE__, n, feed,
+                             streamed.size(), whole.size());
+                ++g_failures;
+                continue;
+            }
+            size_t mismatches = 0;
+            for (size_t i = 0; i < whole.size(); ++i) {
+                if (streamed[i] != whole[i]) {
+                    if (mismatches < 3) {
+                        std::fprintf(stderr, "FAIL %s:%d: n=%zu feed=%zu frame %zu: %.9g vs %.9g\n", __FILE__, __LINE__,
+                                     n, feed, i, static_cast<double>(streamed[i]), static_cast<double>(whole[i]));
+                    }
+                    ++mismatches;
+                }
+            }
+            CHECK(mismatches == 0);
+        }
+    }
+}
+
+void test_compute_frames_rejects_invalid() {
+    transcribe::MelFrontend  mf(stream_config());
+    const std::vector<float> pcm   = pseudo_noise(32000, 7);
+    const int64_t            total = static_cast<int64_t>(pcm.size());
+    std::vector<float>       frames;
+    int                      nm = 0;
+
+    // Frontend knobs that compute() applies over the whole buffer are not
+    // per-frame computable; compute_frames must refuse them up front.
+    {
+        transcribe::MelConfig cfg = stream_config();
+        cfg.pad_mode              = "reflect";
+        transcribe::MelFrontend rf(cfg);
+        CHECK(rf.compute_frames(pcm.data(), pcm.size(), 0, total, 0, 4, frames, nm) == TRANSCRIBE_ERR_INVALID_ARG);
+    }
+    {
+        transcribe::MelConfig cfg = stream_config();
+        cfg.pad_mode              = "none";
+        transcribe::MelFrontend rf(cfg);
+        CHECK(rf.compute_frames(pcm.data(), pcm.size(), 0, total, 0, 4, frames, nm) == TRANSCRIBE_ERR_INVALID_ARG);
+    }
+    {
+        transcribe::MelConfig cfg = stream_config();
+        cfg.normalize             = "per_feature";
+        transcribe::MelFrontend rf(cfg);
+        CHECK(rf.compute_frames(pcm.data(), pcm.size(), 0, total, 0, 4, frames, nm) == TRANSCRIBE_ERR_INVALID_ARG);
+    }
+    {
+        transcribe::MelConfig cfg = stream_config();
+        cfg.log_clamp_min         = 1e-5f;  // LASR/MedASR floor-clamp
+        transcribe::MelFrontend rf(cfg);
+        CHECK(rf.compute_frames(pcm.data(), pcm.size(), 0, total, 0, 4, frames, nm) == TRANSCRIBE_ERR_INVALID_ARG);
+    }
+
+    // Frame range past the finalized length.
+    CHECK(mf.compute_frames(pcm.data(), pcm.size(), 0, total, mf.n_frames_for(pcm.size()), 1, frames, nm) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    // Tail does not cover the requested windows (frames [0, 4) read from
+    // sample 0, but the tail starts at 8000).
+    CHECK(mf.compute_frames(pcm.data() + 8000, pcm.size() - 8000, 8000, total, 0, 4, frames, nm) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    // Null PCM.
+    CHECK(mf.compute_frames(nullptr, pcm.size(), 0, total, 0, 4, frames, nm) == TRANSCRIBE_ERR_INVALID_ARG);
+}
+
 }  // namespace
 
 int main() {
     test_window();
     test_mel_filterbank();
     test_n_frames_for();
+    test_compute_frames_matches_compute();
+    test_compute_frames_rejects_invalid();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "mel_unit: %d failures\n", g_failures);

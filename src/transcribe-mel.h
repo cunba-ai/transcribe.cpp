@@ -147,8 +147,9 @@ class MelFrontend {
     int n_frames_for(size_t n_samples) const;
 
     // Incremental streaming equivalent of compute() for per-frame-
-    // independent frontends: pad_mode == "constant" (zero pad) and
-    // normalize == "none" (no cross-frame statistics). Any other config
+    // independent frontends: pad_mode == "constant" (zero pad),
+    // normalize == "none" (no cross-frame statistics), and
+    // log_clamp_min == 0 (no whole-buffer log floor). Any other config
     // returns TRANSCRIBE_ERR_INVALID_ARG.
     //
     // Computes mel frames [frame_begin, frame_begin + n_frames) of a
