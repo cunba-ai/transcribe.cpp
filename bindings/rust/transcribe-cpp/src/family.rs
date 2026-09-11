@@ -119,6 +119,56 @@ pub enum StreamExtension {
     ParakeetBuffered(ParakeetBufferedStreamOptions),
     MoonshineStreaming(MoonshineStreamingOptions),
     VoxtralRealtime(VoxtralRealtimeStreamOptions),
+    /// Sortformer push-audio diarization session: the operating-point
+    /// preset (same menu as the run-slot [`RunExtension::Sortformer`]).
+    /// A stream produces no text; read turns via
+    /// [`Stream::speaker_segments`](crate::Stream::speaker_segments)
+    /// (committed) and
+    /// [`Stream::tentative_speaker_segments`](crate::Stream::tentative_speaker_segments).
+    ///
+    /// The per-connection loop: one OS thread owns the `Session`, feeds
+    /// arbitrary chunk sizes, and diffs the committed count. Committed
+    /// rows are append-only with absolute-ms timestamps and global
+    /// arrival-order speaker ids, so `committed[prev..]` is exactly the
+    /// set of newly finalized turns:
+    ///
+    /// ```no_run
+    /// use transcribe_cpp::{
+    ///     Model, RunOptions, Session, SortformerPreset, SortformerStreamOptions, StreamExtension,
+    ///     StreamOptions,
+    /// };
+    ///
+    /// # fn ws_audio_thread(model: &Model, next_chunk: &mut dyn FnMut() -> Option<Vec<f32>>) ->
+    /// #     transcribe_cpp::Result<()> {
+    /// let mut session = model.session()?;
+    /// let mut stream = session.stream(
+    ///     &RunOptions::default(),
+    ///     &StreamOptions {
+    ///         family: Some(StreamExtension::Sortformer(SortformerStreamOptions {
+    ///             preset: Some(SortformerPreset::LowLatency),
+    ///         })),
+    ///         ..StreamOptions::default()
+    ///     },
+    /// )?;
+    ///
+    /// let mut committed = 0usize;
+    /// while let Some(pcm) = next_chunk() {
+    ///     stream.feed(&pcm)?; // any chunk size; geometry is internal
+    ///     let turns = stream.speaker_segments();
+    ///     for turn in &turns[committed..] {
+    ///         // turn.speaker_id (1-based, arrival order), turn.t0_ms..t1_ms
+    ///         println!("spk{} {}..{} ms", turn.speaker_id, turn.t0_ms, turn.t1_ms);
+    ///     }
+    ///     committed = turns.len();
+    ///     let _open = stream.tentative_speaker_segments(); // volatile tail
+    /// }
+    ///
+    /// stream.finalize()?; // closes every open turn into the committed set
+    /// let final_turns = stream.speaker_segments();
+    /// # Ok(())
+    /// # }
+    /// ```
+    Sortformer(SortformerStreamOptions),
 }
 
 /// Owns a materialized run-slot C extension struct (and any strings it points
@@ -192,6 +242,7 @@ pub(crate) enum StreamExtRaw {
     ParakeetBuffered(Box<sys::transcribe_parakeet_buffered_stream_ext>),
     MoonshineStreaming(Box<sys::transcribe_moonshine_streaming_stream_ext>),
     VoxtralRealtime(Box<sys::transcribe_voxtral_realtime_stream_ext>),
+    Sortformer(Box<sys::transcribe_sortformer_push_stream_ext>),
 }
 
 impl StreamExtRaw {
@@ -210,6 +261,10 @@ impl StreamExtRaw {
             }
             StreamExtRaw::VoxtralRealtime(e) => {
                 (&**e) as *const sys::transcribe_voxtral_realtime_stream_ext
+                    as *const sys::transcribe_ext
+            }
+            StreamExtRaw::Sortformer(e) => {
+                (&**e) as *const sys::transcribe_sortformer_push_stream_ext
                     as *const sys::transcribe_ext
             }
         }
@@ -248,6 +303,13 @@ impl StreamExtension {
                 set(&mut e.num_delay_tokens, o.num_delay_tokens);
                 set(&mut e.min_decode_interval_ms, o.min_decode_interval_ms);
                 StreamExtRaw::VoxtralRealtime(Box::new(e))
+            }
+            StreamExtension::Sortformer(o) => {
+                let mut e: sys::transcribe_sortformer_push_stream_ext =
+                    unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_sortformer_push_stream_ext_init(&mut e) };
+                set(&mut e.preset, o.preset.map(SortformerPreset::to_sys));
+                StreamExtRaw::Sortformer(Box::new(e))
             }
         }
     }

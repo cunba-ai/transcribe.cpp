@@ -13,6 +13,7 @@ pub const TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM: u32 = 1414746957;
 pub const TRANSCRIBE_EXT_KIND_PARAKEET_STREAM: u32 = 1414744912;
 pub const TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM: u32 = 1396853584;
 pub const TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM: u32 = 1414743635;
+pub const TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM: u32 = 1397769811;
 pub const TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM: u32 = 1414746710;
 pub const TRANSCRIBE_EXT_KIND_WHISPER_RUN: u32 = 1314015319;
 impl transcribe_status {
@@ -931,6 +932,26 @@ const _: () = {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct transcribe_sortformer_push_stream_ext {
+    pub ext: transcribe_ext,
+    pub preset: transcribe_sortformer_preset,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of transcribe_sortformer_push_stream_ext"]
+        [::std::mem::size_of::<transcribe_sortformer_push_stream_ext>() - 24usize];
+    ["Alignment of transcribe_sortformer_push_stream_ext"]
+        [::std::mem::align_of::<transcribe_sortformer_push_stream_ext>() - 8usize];
+    ["Offset of field: transcribe_sortformer_push_stream_ext::ext"]
+        [::std::mem::offset_of!(transcribe_sortformer_push_stream_ext, ext) - 0usize];
+    ["Offset of field: transcribe_sortformer_push_stream_ext::preset"]
+        [::std::mem::offset_of!(transcribe_sortformer_push_stream_ext, preset) - 16usize];
+};
+
+
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct transcribe_voxtral_realtime_stream_ext {
     pub ext: transcribe_ext,
     pub num_delay_tokens: i32,
@@ -1167,6 +1188,9 @@ pub(crate) const TRANSCRIBE_DYN_SYMBOLS: &[&[u8]] = &[
     b"transcribe_parakeet_stream_ext_init",
     b"transcribe_parakeet_buffered_stream_ext_init",
     b"transcribe_sortformer_stream_ext_init",
+    b"transcribe_sortformer_push_stream_ext_init",
+    b"transcribe_sortformer_push_stream_n_tentative",
+    b"transcribe_sortformer_push_stream_get_tentative",
     b"transcribe_voxtral_realtime_stream_ext_init",
     b"transcribe_whisper_run_ext_init",
     b"transcribe_whisper_chunk_trace_init",
@@ -2448,50 +2472,24 @@ pub unsafe extern "C" fn transcribe_sortformer_stream_ext_init(ext: *mut transcr
     }
 }
 
-/// Runtime trampoline for `transcribe_voxtral_realtime_stream_ext_init` — index 98 in
+/// Runtime trampoline for `transcribe_sortformer_push_stream_ext_init` — index 98 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_voxtral_realtime_stream_ext_init(ext: *mut transcribe_voxtral_realtime_stream_ext) -> () {
+pub unsafe extern "C" fn transcribe_sortformer_push_stream_ext_init(ext: *mut transcribe_sortformer_push_stream_ext) -> () {
     match crate::dynload::fn_ptr(98) {
         Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*mut transcribe_voxtral_realtime_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
+            let __f: unsafe extern "C" fn(*mut transcribe_sortformer_push_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(ext) }
         }
         None => (),
     }
 }
 
-/// Runtime trampoline for `transcribe_whisper_run_ext_init` — index 99 in
+/// Runtime trampoline for `transcribe_sortformer_push_stream_n_tentative` — index 99 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
-pub unsafe extern "C" fn transcribe_whisper_run_ext_init(ext: *mut transcribe_whisper_run_ext) -> () {
+pub unsafe extern "C" fn transcribe_sortformer_push_stream_n_tentative(session: *const transcribe_session) -> ::std::os::raw::c_int {
     match crate::dynload::fn_ptr(99) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*mut transcribe_whisper_run_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(ext) }
-        }
-        None => (),
-    }
-}
-
-/// Runtime trampoline for `transcribe_whisper_chunk_trace_init` — index 100 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_whisper_chunk_trace_init(out: *mut transcribe_whisper_chunk_trace) -> () {
-    match crate::dynload::fn_ptr(100) {
-        Some(__ptr) => {
-            let __f: unsafe extern "C" fn(*mut transcribe_whisper_chunk_trace) -> () = unsafe { ::std::mem::transmute(__ptr) };
-            unsafe { __f(out) }
-        }
-        None => (),
-    }
-}
-
-/// Runtime trampoline for `transcribe_get_whisper_chunk_count` — index 101 in
-/// [`TRANSCRIBE_DYN_SYMBOLS`].
-#[no_mangle]
-pub unsafe extern "C" fn transcribe_get_whisper_chunk_count(session: *const transcribe_session) -> ::std::os::raw::c_int {
-    match crate::dynload::fn_ptr(101) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session) }
@@ -2500,11 +2498,76 @@ pub unsafe extern "C" fn transcribe_get_whisper_chunk_count(session: *const tran
     }
 }
 
-/// Runtime trampoline for `transcribe_get_whisper_chunk_trace` — index 102 in
+/// Runtime trampoline for `transcribe_sortformer_push_stream_get_tentative` — index 100 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_sortformer_push_stream_get_tentative(session: *const transcribe_session, i: ::std::os::raw::c_int, out: *mut transcribe_speaker_segment) -> transcribe_status {
+    match crate::dynload::fn_ptr(100) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_speaker_segment) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session, i, out) }
+        }
+        None => transcribe_status(8),
+    }
+}
+
+/// Runtime trampoline for `transcribe_voxtral_realtime_stream_ext_init` — index 101 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_voxtral_realtime_stream_ext_init(ext: *mut transcribe_voxtral_realtime_stream_ext) -> () {
+    match crate::dynload::fn_ptr(101) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*mut transcribe_voxtral_realtime_stream_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(ext) }
+        }
+        None => (),
+    }
+}
+
+/// Runtime trampoline for `transcribe_whisper_run_ext_init` — index 102 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_whisper_run_ext_init(ext: *mut transcribe_whisper_run_ext) -> () {
+    match crate::dynload::fn_ptr(102) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*mut transcribe_whisper_run_ext) -> () = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(ext) }
+        }
+        None => (),
+    }
+}
+
+/// Runtime trampoline for `transcribe_whisper_chunk_trace_init` — index 103 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_whisper_chunk_trace_init(out: *mut transcribe_whisper_chunk_trace) -> () {
+    match crate::dynload::fn_ptr(103) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*mut transcribe_whisper_chunk_trace) -> () = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(out) }
+        }
+        None => (),
+    }
+}
+
+/// Runtime trampoline for `transcribe_get_whisper_chunk_count` — index 104 in
+/// [`TRANSCRIBE_DYN_SYMBOLS`].
+#[no_mangle]
+pub unsafe extern "C" fn transcribe_get_whisper_chunk_count(session: *const transcribe_session) -> ::std::os::raw::c_int {
+    match crate::dynload::fn_ptr(104) {
+        Some(__ptr) => {
+            let __f: unsafe extern "C" fn(*const transcribe_session) -> ::std::os::raw::c_int = unsafe { ::std::mem::transmute(__ptr) };
+            unsafe { __f(session) }
+        }
+        None => -1,
+    }
+}
+
+/// Runtime trampoline for `transcribe_get_whisper_chunk_trace` — index 105 in
 /// [`TRANSCRIBE_DYN_SYMBOLS`].
 #[no_mangle]
 pub unsafe extern "C" fn transcribe_get_whisper_chunk_trace(session: *const transcribe_session, i: ::std::os::raw::c_int, out_trace: *mut transcribe_whisper_chunk_trace) -> transcribe_status {
-    match crate::dynload::fn_ptr(102) {
+    match crate::dynload::fn_ptr(105) {
         Some(__ptr) => {
             let __f: unsafe extern "C" fn(*const transcribe_session, ::std::os::raw::c_int, *mut transcribe_whisper_chunk_trace) -> transcribe_status = unsafe { ::std::mem::transmute(__ptr) };
             unsafe { __f(session, i, out_trace) }

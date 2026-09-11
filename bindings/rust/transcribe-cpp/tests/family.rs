@@ -16,11 +16,12 @@ mod common;
 
 use transcribe_cpp::sys::{
     TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
-    TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM,
+    TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM, TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM,
 };
 use transcribe_cpp::{
-    ExtSlot, Model, ParakeetBufferedStreamOptions, ParakeetStreamOptions, RunOptions, Stream,
-    StreamExtension, StreamOptions, VoxtralRealtimeStreamOptions,
+    ExtSlot, Model, ParakeetBufferedStreamOptions, ParakeetStreamOptions, RunExtension, RunOptions,
+    SortformerPreset, SortformerStreamOptions, SpeakerSegment, Stream, StreamExtension,
+    StreamOptions, VoxtralRealtimeStreamOptions,
 };
 
 /// Feed the first ~2 s of `pcm` in 100 ms chunks, finalize, and return
@@ -142,4 +143,101 @@ fn voxtral_realtime_streams_with_extension() {
     let (is_final, text) = short_feed_text(&mut stream, &pcm);
     assert!(is_final);
     assert!(!text.trim().is_empty(), "voxtral produced no text");
+}
+
+// --- sortformer push-audio diarization (SFPS, stream slot) ----------------
+
+#[test]
+fn sortformer_acceptance_discriminates() {
+    let Some(model_path) = common::smoke_sortformer_model() else {
+        eprintln!("skip sortformer_acceptance_discriminates: model absent");
+        return;
+    };
+    let model = Model::load(&model_path).unwrap();
+    assert!(
+        model.capabilities().supports_streaming,
+        "sortformer is natively streaming"
+    );
+    assert!(
+        model.accepts_ext(ExtSlot::Stream, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM),
+        "sortformer should accept SORTFORMER_PUSH_STREAM on the stream slot"
+    );
+    assert!(
+        !model.accepts_ext(ExtSlot::Run, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM),
+        "SORTFORMER_PUSH_STREAM is stream-slot-only"
+    );
+}
+
+#[test]
+fn sortformer_streams_with_extension() {
+    let (Some(model_path), Some(pcm)) =
+        (common::smoke_sortformer_model(), common::smoke_diar_audio())
+    else {
+        eprintln!("skip sortformer_streams_with_extension: model/audio absent");
+        return;
+    };
+    let mut session = Model::load(&model_path).unwrap().session().unwrap();
+
+    // 12 s mix, 480 ms chunks: the LOW_LATENCY geometry emits mid-stream, so
+    // tentative turns must appear at some edge and all close at finalize.
+    let mut saw_tentative = false;
+    let mut stream = session
+        .stream(
+            &RunOptions::default(),
+            &StreamOptions {
+                family: Some(StreamExtension::Sortformer(SortformerStreamOptions {
+                    preset: Some(SortformerPreset::LowLatency),
+                })),
+                ..StreamOptions::default()
+            },
+        )
+        .unwrap();
+    for frame in pcm.chunks(7_680) {
+        stream.feed(frame).expect("feed");
+        if !stream.tentative_speaker_segments().is_empty() {
+            saw_tentative = true;
+        }
+    }
+    stream.finalize().unwrap();
+    let low = stream.speaker_segments();
+    drop(stream);
+    assert!(!low.is_empty(), "the oracle mix has two speakers");
+    assert!(
+        saw_tentative,
+        "LOW_LATENCY edges are mid-speech on this mix"
+    );
+    for t in &low {
+        assert!((1..=4).contains(&t.speaker_id));
+    }
+
+    // The offline run at the SAME operating point must reach the same
+    // segmentation (frame-exact here: the incremental mel and window
+    // scheduling are bit-identical to the batch path on a given build).
+    let offline = session
+        .run(
+            &pcm,
+            &RunOptions {
+                family: Some(RunExtension::Sortformer(SortformerStreamOptions {
+                    preset: Some(SortformerPreset::LowLatency),
+                })),
+                ..RunOptions::default()
+            },
+        )
+        .expect("offline run at LOW_LATENCY");
+    let key = |r: &SpeakerSegment| (r.t0_ms, r.t1_ms, r.speaker_id);
+    let mut low_sorted = low.clone();
+    low_sorted.sort_by_key(key);
+    let mut offline_sorted = offline.speaker_segments.clone();
+    offline_sorted.sort_by_key(key);
+    // Compare the semantic fields only: `p` is NaN (not produced), and
+    // NaN != NaN would fail a derived PartialEq.
+    let rows_eq = low_sorted.len() == offline_sorted.len()
+        && low_sorted
+            .iter()
+            .zip(&offline_sorted)
+            .all(|(a, b)| key(a) == key(b));
+    assert!(
+        rows_eq,
+        "streaming == offline segmentation at the same operating point"
+    );
 }

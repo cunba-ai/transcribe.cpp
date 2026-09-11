@@ -172,9 +172,7 @@ impl Session {
 
     /// Remove any installed progress callback.
     pub fn clear_progress_callback(&mut self) {
-        unsafe {
-            sys::transcribe_set_progress_callback(self.ptr, None, std::ptr::null_mut())
-        };
+        unsafe { sys::transcribe_set_progress_callback(self.ptr, None, std::ptr::null_mut()) };
         self.progress = None;
     }
 
@@ -644,6 +642,40 @@ impl Stream<'_> {
         unsafe { sys::transcribe_stream_text_init(&mut raw) };
         let _ = unsafe { sys::transcribe_stream_get_text(self.session.ptr, &mut raw) };
         StreamText::from_raw(&raw)
+    }
+
+    /// The committed speaker turns of a diarization stream (sortformer).
+    ///
+    /// Committed rows are append-only for the stream's life: their count
+    /// never shrinks, timestamps are absolute ms from stream start, and
+    /// speaker ids are global (arrival order). After
+    /// [`finalize`](Self::finalize) this is the full segmentation.
+    /// `Vec` copies — safe to hold across the next feed.
+    pub fn speaker_segments(&self) -> Vec<SpeakerSegment> {
+        let n = unsafe { sys::transcribe_n_speaker_segments(self.session.ptr) };
+        (0..n).map(|i| self.session.speaker_segment(i)).collect()
+    }
+
+    /// The tentative (still-open) speaker turns of a diarization stream —
+    /// at most one per speaker, subject to extension or revision by later
+    /// feeds. Empty after [`finalize`](Self::finalize), which closes every
+    /// open turn into the committed set. `Vec` copies.
+    pub fn tentative_speaker_segments(&self) -> Vec<SpeakerSegment> {
+        let n = unsafe { sys::transcribe_sortformer_push_stream_n_tentative(self.session.ptr) };
+        (0..n)
+            .map(|i| {
+                let mut raw: sys::transcribe_speaker_segment = unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_speaker_segment_init(&mut raw) };
+                let _ = unsafe {
+                    sys::transcribe_sortformer_push_stream_get_tentative(
+                        self.session.ptr,
+                        i,
+                        &mut raw,
+                    )
+                };
+                SpeakerSegment::from_raw(&raw)
+            })
+            .collect()
     }
 
     /// A full structured snapshot (segments/words/tokens) of the current
