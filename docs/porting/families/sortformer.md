@@ -215,15 +215,24 @@ run still open at the processed edge may grow.
   committed rows are the full offline-equivalent segmentation.
 - The stream carries no text: `full_text` stays empty,
   `result_kind = TRANSCRIBE_TIMESTAMPS_NONE`. `update->result_changed`
-  is set when the committed set grew or the tentative set changed;
-  `audio_committed_ms` reports the processed edge, `buffered_ms` the
-  lookahead not yet consumed (drain hint).
+  is set whenever the feed processed at least one window (new decoded
+  frames at the edge) or the committed set grew — it is a cheap "the
+  decode input moved" probe, not a per-set diff. **Consumers must pull
+  the tentative accessors after every feed** (open turns can extend
+  without the committed set growing); the committed set is the only
+  append-only view. `audio_committed_ms` reports the processed edge,
+  `buffered_ms` the lookahead not yet consumed (drain hint).
 
 Parity contract: push-stream vs offline `transcribe_run` on the same
 audio and preset produce the same committed rows after finalize (sorted
-comparison; identical modulo window-edge frames — asserted exact on the
-reference CPU build, allowed a small ms tolerance in the test for
-BLAS-order builds).
+comparison). On the no-BLAS scalar CPU builds this repo ships and tests
+(Windows/MinGW, no system BLAS) the incremental mel and window
+scheduling are bit-identical to the batch path, so the tests assert
+EXACT row equality. On BLAS/Accelerate builds `compute()`'s batched
+sgemm filterbank matmul may differ from `compute_frames()`'s per-frame
+fused accumulation by float rounding, which can move a boundary by a
+frame — exact equality is a build property, and consumers on such
+builds should compare with a small ms tolerance instead.
 
 ### Error paths
 
