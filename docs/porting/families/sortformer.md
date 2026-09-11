@@ -94,6 +94,172 @@ rejected pre-clear (`run_validate`), preserving the previous result.
 Unit test: `tests/sortformer_stream_ext_unit.cpp`
 (`TRANSCRIBE_SORTFORMER_GGUF`-gated).
 
+## Push-audio streaming (STREAM slot)
+
+The compute core is natively streaming; this section specifies the
+push-audio session surface that exposes it (`transcribe_stream_begin` /
+`_feed` / `_finalize`), registered as a separate STREAM-slot kind taking
+the same `transcribe_sortformer_preset` enum.
+
+### Extension kind
+
+`TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM` — FourCC `SFPS`,
+little-endian `0x53504653`, `TRANSCRIBE_EXT_SLOT_STREAM`, struct
+`transcribe_sortformer_push_stream_ext { transcribe_ext ext;
+transcribe_sortformer_preset preset; }`, init function
+`transcribe_sortformer_push_stream_ext_init` (stamps `preset = DEFAULT`).
+Registered in `docs/extension-kinds.md`. One kind per schema: the preset
+enum is shared with the RUN-slot kind, but the slots are distinct and
+each kind stays in exactly one slot. `accepts_ext_kind` accepts `SFST`
+on RUN and `SFPS` on STREAM, nothing else. `caps.supports_streaming` is
+forced on after `read_capability_kv` (the compute core is streaming by
+construction; the GGUF capability KV must not gate the surface).
+
+### Session state layout
+
+One stream per session, single-threaded (matches the dispatcher's
+ACTIVE-state gate and the Rust binding's `&mut` lease; no locks inside
+the family). State hangs off `SortformerSession` as `PushStream`:
+
+- `active`, resolved `SortformerStreamParams` (preset resolved at begin,
+  identical precedence to `run()`) and `ms_per_frame`.
+- Raw-PCM tail: `std::vector<float> pcm` plus the absolute stream sample
+  index of `pcm[0]`. Samples older than the next uncomputed STFT frame's
+  left window edge are dropped; the retained tail is bounded by
+  `n_fft/2 + hop` samples plus one feed, independent of stream length.
+- Mel tail: `std::vector<float> mel` columns `[mel_start, mel_computed)`
+  of the logical `[n_mels, T]` matrix. Columns before the next chunk's
+  `win_lo` (`stt - chunk_left_context*sub`, clamped) are dropped;
+  retention is bounded by one chunk window (`chunk_len + lc + rc`
+  frames), independent of stream length. Peak compute memory is the
+  per-chunk graph (as offline); nothing else grows with duration except
+  the append-only `total_preds` / committed-turn rows (the product).
+- Chunk cursor `stt` (next chunk's middle-start mel frame), and the
+  decode bookkeeping (`committed` rows, per-speaker open-run tails).
+- The AOSC/FIFO state is the existing persistent `DiarStreamScratch`
+  (`sc.stream`); `stream_begin` resets it exactly as the offline core
+  does.
+
+### Incremental mel frontend
+
+`run()` computes the whole-file mel once; the push path cannot. The
+Sortformer frontend (`pad_mode="constant"`, `normalize="none"`,
+`nemo_seq_len_ceil`) is per-frame independent, which makes an exact
+incremental form possible:
+
+- STFT frame `t` reads pre-emphasized samples `[t*hop - n_fft/2,
+  t*hop + n_fft/2)` (zero outside the recording). Frame `t` is fully
+  determined once `t*hop + n_fft/2 <= n_arrived`; since `n_fft/2 > hop`,
+  any frame computable mid-stream is a "real" frame (index `< floor(N/hop)`).
+- `MelFrontend::compute_frames()` (new, in `transcribe-mel.cpp`) computes
+  an arbitrary frame range from the caller's sample tail, sharing the
+  constructor's window/filterbank/FFT and reusing the exact scalar fused
+  STFT+mel+log inner loop of `compute()` (per-frame, deterministic;
+  this build has no system BLAS). Pre-emphasis is applied on the fly per
+  sample (`y[i] = x[i] - alpha*x[i-1]`, `y[0] = x[0]`), matching
+  `compute()`'s padded-buffer arithmetic bit-for-bit on the same build.
+- The trailing partial frame of the finalized stream
+  (`floor(N/hop) < t < ceil(N/hop)`, at most one) is the zero mask
+  `compute()` applies for `normalize="none"`; `stream_finalize` emits it
+  as zeros. Feeds never emit masked frames.
+
+This makes streaming mel bit-identical to the batch path on the same
+build (verified by test, see below).
+
+### Window scheduling (parity with the batch core)
+
+`run_diar_streaming_core`'s per-chunk body (Graph A pre-encode over the
+mel window, host concat `[spkcache|fifo|chunk]`, Graph B, AOSC/FIFO
+`streaming_update_sync`) is factored verbatim into
+`run_diar_streaming_window()`; the offline core loop calls it with
+identical window arithmetic (no math change — the offline path's outputs
+and dumps are untouched). The push session drives the same function:
+
+- Feed time: a chunk is emitted as soon as its **full** window exists:
+  `stt + chunk_len*sub + rc*sub <= frames_ready`. Window arithmetic is
+  the core's verbatim (`left_offset = min(lc*sub, stt)`, `end = stt +
+  chunk_len*sub`, `rc` frames of right context). Any chunk the batch
+  loop would run with full right context is emitted at feed time with
+  the identical window; `frames_ready <= T_final` always holds, so a
+  feed-time emission implies the batch loop also had full right context.
+- Finalize time: remaining real + masked frames are computed, then the
+  remaining chunks run with the batch loop's clipped formulas
+  (`end = min(stt + chunk_len*sub, T_final)`,
+  `right_offset = min(rc*sub, T_final - end)`), `while (stt < T_final)`.
+
+Together: chunk boundaries, window contents, and AOSC state updates are
+exactly the batch loop's, independent of feed sizes (chunk-size
+invariance is asserted by test). Output frame `i` is final once
+accumulated (`total_preds` is append-only; NeMo streaming guarantees
+frames are never revisited).
+
+### Committed / tentative semantics
+
+Every window re-decodes the accumulated `[T, 4]` probs with the shipped
+0.5-threshold run extractor (per-speaker maximal runs). A run whose end
+is determined (activity dropped below threshold) can never change; a
+run still open at the processed edge may grow.
+
+- `transcribe_n_speaker_segments` / `transcribe_get_speaker_segment`
+  expose **committed turns only**: append-only, monotone in count,
+  timestamps in absolute ms from stream start, speaker ids global and
+  arrival-order (AOSC columns). Rows are appended in turn-close order.
+  `transcribe_stream_n_committed_segments` equals the row count.
+- Tentative (open) turns are exposed via new family accessors on the
+  same session:
+  `transcribe_sortformer_push_stream_n_tentative()` /
+  `_get_tentative(session, i, out)` returning
+  `transcribe_speaker_segment` rows. At most one open row per speaker.
+  `feed` returns them until `stream_finalize` closes every open run at
+  the final timestamp, after which the tentative set is empty and the
+  committed rows are the full offline-equivalent segmentation.
+- The stream carries no text: `full_text` stays empty,
+  `result_kind = TRANSCRIBE_TIMESTAMPS_NONE`. `update->result_changed`
+  is set when the committed set grew or the tentative set changed;
+  `audio_committed_ms` reports the processed edge, `buffered_ms` the
+  lookahead not yet consumed (drain hint).
+
+Parity contract: push-stream vs offline `transcribe_run` on the same
+audio and preset produce the same committed rows after finalize (sorted
+comparison; identical modulo window-edge frames — asserted exact on the
+reference CPU build, allowed a small ms tolerance in the test for
+BLAS-order builds).
+
+### Error paths
+
+- `transcribe_stream_begin`: dispatcher preflight handles state/struct/
+  capability; family `stream_validate` runs `transcribe_ext_check` on
+  the `SFPS` kind and the preset range check pre-clear (rejection
+  preserves the previous snapshot, no FAILED transition), matching the
+  RUN-slot `run_validate` gate. A NULL stream ext selects DEFAULT.
+- `stream_feed` / `stream_finalize`: abort callback is polled per chunk
+  (`TRANSCRIBE_ERR_ABORTED` transitions to FAILED, partial rows
+  preserved); ggml failures surface as `TRANSCRIBE_ERR_GGUF`.
+- Audio too short to produce >= 2 mel frames yields an empty
+  segmentation at finalize (OK, zero rows) — a deliberate divergence
+  from `transcribe_run`, which rejects such clips up front.
+
+### Threading
+
+One stream per session, one thread at a time (dispatcher-enforced);
+no locks inside the family. The existing per-session `DiarStreamScratch`
+and scheduler keep concurrent sessions of one model isolated; the
+0.x one-compute-per-model rule applies unchanged (the Rust binding's
+per-model lease covers the stream lifetime).
+
+### Tests
+
+`tests/sortformer_push_stream_unit.cpp`
+(`TRANSCRIBE_SORTFORMER_GGUF`-gated, RC 77 skip): kind/slot probe +
+init stamping; `stream_validate` rejection with snapshot preservation;
+feed-vs-offline parity on the committed 2-spk oracle; chunk-size
+invariance (1 s vs 10 s feeds identical); tentative->committed
+convergence at finalize. `tests/sortformer_push_stream_long.cpp`
+(env-gated wav): full-stream run over a multi-minute file — bounded
+memory (constant chunk geometry), global speaker identity, committed
+monotonicity. Existing tests must stay green unchanged (offline path
+byte-identical; golden RTTM untouched).
+
 ## Quant policy (Stage 7)
 
 Shipped matrix: **F32 (reference) + F16 + Q8_0** only
