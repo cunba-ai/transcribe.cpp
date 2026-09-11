@@ -39,7 +39,7 @@ impl transcribe_status {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_status(pub ::std::os::raw::c_int);
+pub struct transcribe_status(pub ::std::os::raw::c_uint);
 unsafe extern "C" {
     pub fn transcribe_status_string(status: ::std::os::raw::c_int)
         -> *const ::std::os::raw::c_char;
@@ -72,7 +72,7 @@ impl transcribe_abi_struct {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_abi_struct(pub ::std::os::raw::c_int);
+pub struct transcribe_abi_struct(pub ::std::os::raw::c_uint);
 unsafe extern "C" {
     pub fn transcribe_abi_struct_size(which: transcribe_abi_struct) -> usize;
 }
@@ -89,7 +89,7 @@ impl transcribe_log_level {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_log_level(pub ::std::os::raw::c_int);
+pub struct transcribe_log_level(pub ::std::os::raw::c_uint);
 pub type transcribe_log_callback = ::std::option::Option<
     unsafe extern "C" fn(
         level: transcribe_log_level,
@@ -106,7 +106,7 @@ impl transcribe_task {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_task(pub ::std::os::raw::c_int);
+pub struct transcribe_task(pub ::std::os::raw::c_uint);
 impl transcribe_timestamp_kind {
     pub const TRANSCRIBE_TIMESTAMPS_NONE: transcribe_timestamp_kind = transcribe_timestamp_kind(0);
     pub const TRANSCRIBE_TIMESTAMPS_AUTO: transcribe_timestamp_kind = transcribe_timestamp_kind(1);
@@ -117,7 +117,7 @@ impl transcribe_timestamp_kind {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_timestamp_kind(pub ::std::os::raw::c_int);
+pub struct transcribe_timestamp_kind(pub ::std::os::raw::c_uint);
 impl transcribe_kv_type {
     pub const TRANSCRIBE_KV_TYPE_AUTO: transcribe_kv_type = transcribe_kv_type(0);
     pub const TRANSCRIBE_KV_TYPE_F32: transcribe_kv_type = transcribe_kv_type(1);
@@ -125,7 +125,7 @@ impl transcribe_kv_type {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_kv_type(pub ::std::os::raw::c_int);
+pub struct transcribe_kv_type(pub ::std::os::raw::c_uint);
 impl transcribe_pnc_mode {
     pub const TRANSCRIBE_PNC_MODE_DEFAULT: transcribe_pnc_mode = transcribe_pnc_mode(0);
     pub const TRANSCRIBE_PNC_MODE_OFF: transcribe_pnc_mode = transcribe_pnc_mode(1);
@@ -133,7 +133,7 @@ impl transcribe_pnc_mode {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_pnc_mode(pub ::std::os::raw::c_int);
+pub struct transcribe_pnc_mode(pub ::std::os::raw::c_uint);
 impl transcribe_itn_mode {
     pub const TRANSCRIBE_ITN_MODE_DEFAULT: transcribe_itn_mode = transcribe_itn_mode(0);
     pub const TRANSCRIBE_ITN_MODE_OFF: transcribe_itn_mode = transcribe_itn_mode(1);
@@ -141,7 +141,7 @@ impl transcribe_itn_mode {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_itn_mode(pub ::std::os::raw::c_int);
+pub struct transcribe_itn_mode(pub ::std::os::raw::c_uint);
 impl transcribe_diarize_mode {
     pub const TRANSCRIBE_DIARIZE_MODE_DEFAULT: transcribe_diarize_mode = transcribe_diarize_mode(0);
     pub const TRANSCRIBE_DIARIZE_MODE_OFF: transcribe_diarize_mode = transcribe_diarize_mode(1);
@@ -149,7 +149,7 @@ impl transcribe_diarize_mode {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_diarize_mode(pub ::std::os::raw::c_int);
+pub struct transcribe_diarize_mode(pub ::std::os::raw::c_uint);
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_model {
@@ -188,7 +188,7 @@ impl transcribe_ext_slot {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_ext_slot(pub ::std::os::raw::c_int);
+pub struct transcribe_ext_slot(pub ::std::os::raw::c_uint);
 unsafe extern "C" {
     pub fn transcribe_model_accepts_ext_kind(
         model: *const transcribe_model,
@@ -208,7 +208,7 @@ impl transcribe_backend_request {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_backend_request(pub ::std::os::raw::c_int);
+pub struct transcribe_backend_request(pub ::std::os::raw::c_uint);
 unsafe extern "C" {
     pub fn transcribe_init_backends(
         artifact_dir: *const ::std::os::raw::c_char,
@@ -237,7 +237,7 @@ impl transcribe_device_type {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_device_type(pub ::std::os::raw::c_int);
+pub struct transcribe_device_type(pub ::std::os::raw::c_uint);
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_device_info {
@@ -343,7 +343,7 @@ impl transcribe_vad_mode {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_vad_mode(pub ::std::os::raw::c_int);
+pub struct transcribe_vad_mode(pub ::std::os::raw::c_uint);
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_vad_params {
@@ -540,7 +540,7 @@ impl transcribe_feature {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_feature(pub ::std::os::raw::c_int);
+pub struct transcribe_feature(pub ::std::os::raw::c_uint);
 unsafe extern "C" {
     pub fn transcribe_model_supports(
         model: *const transcribe_model,
@@ -690,7 +690,7 @@ impl transcribe_stream_state {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_stream_state(pub ::std::os::raw::c_int);
+pub struct transcribe_stream_state(pub ::std::os::raw::c_uint);
 impl transcribe_stream_commit_policy {
     pub const TRANSCRIBE_STREAM_COMMIT_AUTO: transcribe_stream_commit_policy =
         transcribe_stream_commit_policy(0);
@@ -701,7 +701,7 @@ impl transcribe_stream_commit_policy {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_stream_commit_policy(pub ::std::os::raw::c_int);
+pub struct transcribe_stream_commit_policy(pub ::std::os::raw::c_uint);
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_stream_params {
@@ -1287,7 +1287,7 @@ impl transcribe_sortformer_preset {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_sortformer_preset(pub ::std::os::raw::c_int);
+pub struct transcribe_sortformer_preset(pub ::std::os::raw::c_uint);
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_sortformer_stream_ext {
@@ -1380,7 +1380,7 @@ impl transcribe_whisper_prompt_condition {
 }
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct transcribe_whisper_prompt_condition(pub ::std::os::raw::c_int);
+pub struct transcribe_whisper_prompt_condition(pub ::std::os::raw::c_uint);
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct transcribe_whisper_run_ext {
