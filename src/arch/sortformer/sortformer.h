@@ -197,6 +197,44 @@ struct SortformerSession final : public transcribe_session {
     // offline forward's pos_emb fill).
     DiarStreamScratch scratch;
 
+    // Push-audio streaming state (STREAM slot; see docs/porting/families/
+    // sortformer.md "Push-audio streaming"). Holds only bounded tails and
+    // cursors; the AOSC/FIFO state lives in `scratch.stream`, the result
+    // rows in the base session's speaker_segments (committed set).
+    struct PushStream {
+        bool                         active = false;
+        transcribe_sortformer_preset preset = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+        SortformerStreamParams       params;
+        double                       ms_per_frame = 0.0;  // one diar frame, ms
+        int                          n_mels       = 0;
+        int                          sub          = 0;    // mel frames per diar frame
+        int                          hop          = 0;    // STFT hop, samples
+        int                          pad          = 0;    // STFT left/right pad, samples
+
+        // Raw-PCM tail: pcm[0] is absolute stream sample `pcm_start`.
+        // Trimmed to the next uncomputed STFT frame's window each feed.
+        std::vector<float> pcm;
+        int64_t            pcm_start     = 0;
+        int64_t            total_samples = 0;  // samples fed since begin
+
+        // Mel tail: frames [mel_start, mel_computed) of the logical
+        // [n_mels, T] mel, frame-major (frame j at mel[j*n_mels + m]) so
+        // appends are a plain insert. Trimmed to the next chunk's window
+        // each emit.
+        std::vector<float> mel;
+        int64_t            mel_start    = 0;
+        int64_t            mel_computed = 0;  // absolute frames computed (real + masked)
+
+        int64_t stt = 0;                      // next chunk's middle-start mel frame
+
+        // Trailing open turns (at most one per speaker), refreshed after
+        // every window; closed turns are appended to the base session's
+        // speaker_segments in turn-close order.
+        std::vector<transcribe_session::SpeakerSegmentEntry> tentative;
+
+        void reset();
+    } push;
+
     SortformerSession() = default;
     ~SortformerSession() override;
 };

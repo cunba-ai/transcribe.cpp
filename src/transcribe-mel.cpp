@@ -859,4 +859,206 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     return TRANSCRIBE_OK;
 }
 
+// ---- Incremental streaming frames (see transcribe-mel.h) --------------
+//
+// Per-frame re-implementation of compute()'s constant-pad / normalize=
+// "none" pipeline: frame t reads pre-emphasized samples
+// [t*hop - n_fft/2, t*hop + n_fft/2), zero outside [0, total). Pre-
+// emphasis is applied on the fly (y[i] = x[i] - alpha*x[i-1], y[0] =
+// x[0]) with the same fp64 arithmetic as compute()'s padded buffer, so
+// each frame equals compute()'s output for that column exactly on the
+// no-BLAS scalar path (the FFT and filterbank/log expressions below are
+// the same code shapes; only the sgemm batched matmul is not reused).
+
+transcribe_status MelFrontend::compute_frames(const float *        pcm,
+                                              size_t               n_samples,
+                                              int64_t              first_sample,
+                                              int64_t              total_stream_samples,
+                                              int64_t              frame_begin,
+                                              int                  n_frames,
+                                              std::vector<float> & out_mel,
+                                              int &                out_n_mels) const {
+    if (pcm == nullptr || total_stream_samples < 0 || first_sample < 0 ||
+        first_sample > static_cast<int64_t>(total_stream_samples)) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (cfg_.pad_mode != "constant" || cfg_.normalize != "none") {
+        // Reflect padding and cross-frame normalization are not causal /
+        // per-frame computable; compute() is the only supported path there.
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (n_frames < 0 || frame_begin < 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int     n_fft  = cfg_.n_fft;
+    const int     hop    = cfg_.hop_length;
+    const int     n_mels = cfg_.num_mels;
+    const int     n_freq = n_freq_;
+    const int     pad    = n_fft / 2;
+    const int64_t total  = total_stream_samples;
+
+    const int64_t n_frames_total = static_cast<int64_t>(n_frames_for(static_cast<size_t>(total)));
+    const int64_t real_frames    = static_cast<int64_t>(total / static_cast<size_t>(hop));  // mask boundary
+    if (frame_begin + n_frames > n_frames_total) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (n_frames == 0) {
+        out_mel.clear();
+        out_n_mels = n_mels;
+        return TRANSCRIBE_OK;
+    }
+
+    // Window coverage: the STFT (non-masked) frames need emphasized
+    // samples [t_lo*hop - pad, t_hi*hop + pad), and pre-emphasis needs
+    // one sample of raw left overlap for the lowest in-stream index.
+    const int64_t n_real = std::min<int64_t>(frame_begin + n_frames, std::min<int64_t>(real_frames, n_frames_total));
+    if (n_real > frame_begin) {
+        const int64_t lo      = frame_begin * static_cast<int64_t>(hop) - pad;
+        const int64_t hi      = (n_real - 1) * static_cast<int64_t>(hop) + pad;  // exclusive
+        const int64_t need_lo = std::max<int64_t>(0, lo) - (lo > 0 ? 1 : 0);
+        const int64_t need_hi = std::min<int64_t>(total, hi);
+        if (first_sample > need_lo || first_sample + static_cast<int64_t>(n_samples) < need_hi) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+
+    const bool n_fft_is_pow2 = ((n_fft > 0) && ((n_fft & (n_fft - 1)) == 0));
+    out_mel.assign(static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames), 0.0f);
+
+    auto sample_at = [&](int64_t i) -> float {
+        // Raw stream sample x[i], zero outside [0, total); must be in the
+        // provided tail when [0, total) overlaps the frame windows.
+        if (i < first_sample || i >= first_sample + static_cast<int64_t>(n_samples) || i < 0 || i >= total) {
+            return 0.0f;
+        }
+        return pcm[i - first_sample];
+    };
+    // Pre-emphasis with the same precision as the matching compute() path:
+    // the fp64 radix-2 path emphasizes in double, the fp32 mixed-radix
+    // path in float (compute() builds two different padded buffers).
+    auto emph_f64 = [&](int64_t i) -> double {
+        if (i < 0 || i >= total) {
+            return 0.0;
+        }
+        const double cur = static_cast<double>(sample_at(i));
+        if (i == 0 || cfg_.pre_emphasis == 0.0f) {
+            return cur;
+        }
+        return cur - static_cast<double>(cfg_.pre_emphasis) * static_cast<double>(sample_at(i - 1));
+    };
+    auto emph_f32 = [&](int64_t i) -> float {
+        if (i < 0 || i >= total) {
+            return 0.0f;
+        }
+        const float cur = sample_at(i);
+        if (i == 0 || cfg_.pre_emphasis == 0.0f) {
+            return cur;
+        }
+        return cur - cfg_.pre_emphasis * sample_at(i - 1);
+    };
+
+    // Fused mel matmul + log over one power row; the summation shape is
+    // byte-for-byte compute()'s scalar fallback.
+    auto mel_log_row = [&](const float * power, int col) {
+        for (int m = 0; m < n_mels; ++m) {
+            const float * fb_row = mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+            double        sum    = 0.0;
+            int           k      = 0;
+            for (; k < n_freq - 3; k += 4) {
+                sum += static_cast<double>(fb_row[k]) * static_cast<double>(power[k]) +
+                       static_cast<double>(fb_row[k + 1]) * static_cast<double>(power[k + 1]) +
+                       static_cast<double>(fb_row[k + 2]) * static_cast<double>(power[k + 2]) +
+                       static_cast<double>(fb_row[k + 3]) * static_cast<double>(power[k + 3]);
+            }
+            for (; k < n_freq; ++k) {
+                sum += static_cast<double>(fb_row[k]) * static_cast<double>(power[k]);
+            }
+            out_mel[static_cast<size_t>(m) * static_cast<size_t>(n_frames) + static_cast<size_t>(col)] =
+                static_cast<float>(std::log(sum + static_cast<double>(kLogEps)));
+        }
+    };
+
+    auto emit_frame = [&](int64_t t, int col) {
+        if (t >= real_frames) {
+            // Trailing partial frame: compute() zero-masks it for
+            // normalize="none" (out_mel is pre-zeroed).
+            return;
+        }
+        const int64_t start = t * static_cast<int64_t>(hop) - pad;
+        if (n_fft_is_pow2) {
+#ifdef __APPLE__
+            // vDSP real-input FFT (fp64), mirroring compute()'s Apple path.
+            const size_t          half_n = static_cast<size_t>(n_fft / 2);
+            std::vector<double>   fft_real(half_n);
+            std::vector<double>   fft_imag(half_n);
+            DSPDoubleSplitComplex split = { fft_real.data(), fft_imag.data() };
+            int                   log2n = 0;
+            {
+                int tmp = n_fft;
+                while (tmp > 1) {
+                    tmp >>= 1;
+                    ++log2n;
+                }
+            }
+            FFTSetupD fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
+            for (size_t k = 0; k < half_n; ++k) {
+                fft_real[k] = emph_f64(start + static_cast<int64_t>(2 * k)) * window_[2 * k];
+                fft_imag[k] = emph_f64(start + static_cast<int64_t>(2 * k) + 1) * window_[2 * k + 1];
+            }
+            vDSP_fft_zripD(fft_setup, &split, 1, log2n, FFT_FORWARD);
+            std::vector<float> power(static_cast<size_t>(n_freq));
+            power[0]      = static_cast<float>(fft_real[0] * fft_real[0] * 0.25);
+            power[half_n] = static_cast<float>(fft_imag[0] * fft_imag[0] * 0.25);
+            for (size_t k = 1; k < half_n; ++k) {
+                power[k] = static_cast<float>((fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) * 0.25);
+            }
+            vDSP_destroy_fftsetupD(fft_setup);
+            mel_log_row(power.data(), col);
+#else
+            // fp64 radix-2 path (matches compute() on non-Apple builds).
+            std::vector<double> frame(2 * static_cast<size_t>(n_fft));
+            for (int k = 0; k < n_fft; ++k) {
+                frame[2 * static_cast<size_t>(k)]     = emph_f64(start + k) * window_[k];
+                frame[2 * static_cast<size_t>(k) + 1] = 0.0;
+            }
+            fft_radix2(frame.data(), n_fft);
+            std::vector<float> power(static_cast<size_t>(n_freq));
+            for (int k = 0; k < n_freq; ++k) {
+                const double re = frame[2 * static_cast<size_t>(k)];
+                const double im = frame[2 * static_cast<size_t>(k) + 1];
+                power[k]        = static_cast<float>(re * re + im * im);
+            }
+            mel_log_row(power.data(), col);
+#endif
+        } else {
+            // fp32 mixed-radix path (matches compute()'s fused worker).
+            std::vector<float> fft_in(2 * static_cast<size_t>(n_fft), 0.0f);
+            std::vector<float> fft_out(8 * static_cast<size_t>(n_fft), 0.0f);
+            std::vector<float> window_f32(static_cast<size_t>(n_fft));
+            for (int k = 0; k < n_fft; ++k) {
+                window_f32[k] = static_cast<float>(window_[k]);
+            }
+            for (int k = 0; k < n_fft; ++k) {
+                fft_in[k] = emph_f32(start + k) * window_f32[k];
+            }
+            mixed_radix_fft_f32(fft_in.data(), n_fft, cos_lut_.data(), sin_lut_.data(),
+                                static_cast<int>(cos_lut_.size()), fft_out.data());
+            std::vector<float> power(static_cast<size_t>(n_freq));
+            for (int k = 0; k < n_freq; ++k) {
+                const float re = fft_out[2 * k];
+                const float im = fft_out[2 * k + 1];
+                power[k]       = re * re + im * im;
+            }
+            mel_log_row(power.data(), col);
+        }
+    };
+
+    for (int i = 0; i < n_frames; ++i) {
+        emit_frame(frame_begin + i, i);
+    }
+    out_n_mels = n_mels;
+    return TRANSCRIBE_OK;
+}
+
 }  // namespace transcribe

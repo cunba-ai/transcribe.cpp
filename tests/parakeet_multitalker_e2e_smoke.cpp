@@ -153,11 +153,23 @@ int main() {
 
     // diarize=ON in both supervision modes. Select each mode explicitly so
     // a change to the runtime default cannot silently reduce test coverage.
+#if defined(_WIN32)
+    ::_putenv_s("TRANSCRIBE_MULTITALKER_MODE", "masked");  // MinGW: no setenv
+#else
     setenv("TRANSCRIBE_MULTITALKER_MODE", "masked", /*overwrite=*/1);
+#endif
     run_multitalker_checks(ctx, pcm, "masked");
+#if defined(_WIN32)
+    ::_putenv_s("TRANSCRIBE_MULTITALKER_MODE", "kernel");
+#else
     setenv("TRANSCRIBE_MULTITALKER_MODE", "kernel", /*overwrite=*/1);
+#endif
     run_multitalker_checks(ctx, pcm, "kernel");
+#if defined(_WIN32)
+    ::_putenv_s("TRANSCRIBE_MULTITALKER_MODE", "");
+#else
     unsetenv("TRANSCRIBE_MULTITALKER_MODE");
+#endif
 
     transcribe_session_free(ctx);
     transcribe_model_free(model);

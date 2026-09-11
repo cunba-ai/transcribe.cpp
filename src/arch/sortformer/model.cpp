@@ -12,6 +12,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "sortformer.h"
+#include "transcribe-abi.h"
 #include "transcribe-arch.h"
 #include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
@@ -71,6 +72,25 @@ DiarStreamScratch::~DiarStreamScratch() {
 }
 
 SortformerSession::~SortformerSession() = default;
+
+void SortformerSession::PushStream::reset() {
+    active       = false;
+    preset       = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+    params       = SortformerStreamParams{};
+    ms_per_frame = 0.0;
+    n_mels       = 0;
+    sub          = 0;
+    hop          = 0;
+    pad          = 0;
+    pcm.clear();
+    pcm_start     = 0;
+    total_samples = 0;
+    mel.clear();
+    mel_start    = 0;
+    mel_computed = 0;
+    stt          = 0;
+    tentative.clear();
+}
 
 namespace {
 
@@ -547,6 +567,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (const transcribe_status st = read_capability_kv(loader.gguf(), m->caps); st != TRANSCRIBE_OK) {
         return st;
     }
+    // The compute core is natively streaming (AOSC + FIFO); the push-audio
+    // surface is unconditional. Set after read_capability_kv so a GGUF with
+    // a stale/absent streaming capability KV cannot gate it (parakeet does
+    // the same for its chunked variants).
+    m->caps.supports_streaming = true;
     if (const transcribe_status st = read_languages_kv(loader.gguf(), *m); st != TRANSCRIBE_OK) {
         return st;
     }
@@ -793,11 +818,133 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     return TRANSCRIBE_OK;
 }
 
+// One streaming window: Graph A (pre_encode over the mel window), host
+// concat [spkcache|fifo|chunk], Graph B (blocks + proj + transformer +
+// head), and the host streaming_update_sync (FIFO + AOSC compress). The
+// per-chunk body of run_diar_streaming_core, factored verbatim so the
+// push-audio session (stream_begin/feed) drives the identical computation
+// on its own bounded mel windows. window_mel is [n_mels, M] row-major
+// (the already-sliced window); lc / rc are the diar-frame context counts
+// baked into the window's edges, drop the pre-encode outputs to discard
+// (external cadence only; 0 on the standalone path).
+static transcribe_status run_diar_streaming_window(DiarStreamScratch &            sc,
+                                                   const SortformerHParams &      hp,
+                                                   const pk::ParakeetHParams &    chp,
+                                                   const pk::ParakeetWeights &    conformer,
+                                                   const SortformerWeights &      w,
+                                                   const char *                   backend,
+                                                   ggml_backend_sched_t           sched,
+                                                   int                            n_threads,
+                                                   const SortformerStreamParams & P,
+                                                   int                            mel_n_mels,
+                                                   const float *                  window_mel,
+                                                   int                            M,
+                                                   int                            lc,
+                                                   int                            rc,
+                                                   int                            drop) {
+    const int ed    = chp.enc_d_model;
+    const int n_spk = hp.max_speakers;
+
+    if (sc.compute_ctx != nullptr) {
+        ggml_free(sc.compute_ctx);
+        sc.compute_ctx = nullptr;
+    }
+    {
+        ggml_init_params ip{};
+        ip.mem_size    = 32 * 1024 * 1024;
+        ip.mem_buffer  = nullptr;
+        ip.no_alloc    = true;
+        sc.compute_ctx = ggml_init(ip);
+        if (sc.compute_ctx == nullptr) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+    ggml_context * ctx = sc.compute_ctx;
+    transcribe::debug::push_name_prefix("stream.chunk");
+
+    // ---- Graph A: pre_encode over the mel window ----
+    PreEncodeBuild A = build_pre_encode_graph(ctx, chp, conformer.pre_encode, backend, M);
+    if (A.graph == nullptr) {
+        transcribe::debug::pop_name_prefix();
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    int T_diar = static_cast<int>(A.out->ne[1]);
+
+    ggml_backend_sched_reset(sched);
+    if (!ggml_backend_sched_alloc_graph(sched, A.graph)) {
+        transcribe::debug::pop_name_prefix();
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_tensor_set(A.mel_in, window_mel, 0, static_cast<size_t>(mel_n_mels) * M * sizeof(float));
+    transcribe::configure_sched_n_threads(sched, n_threads);
+    if (ggml_backend_sched_graph_compute(sched, A.graph) != GGML_STATUS_SUCCESS) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: pre_encode compute failed");
+        transcribe::debug::pop_name_prefix();
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    sc.chunk_embs_host.resize(static_cast<size_t>(T_diar) * ed);
+    ggml_backend_tensor_get(A.out, sc.chunk_embs_host.data(), 0, sc.chunk_embs_host.size() * sizeof(float));
+
+    // External cadence: discard the duplicated / partially-contexted
+    // pre-encode outputs (NeMo drop_extra_pre_encoded, applied right
+    // after pre_encode and before the encoder).
+    if (drop > 0) {
+        if (T_diar <= drop) {
+            // Degenerate tail chunk: nothing valid to append.
+            transcribe::debug::pop_name_prefix();
+            return TRANSCRIBE_OK;
+        }
+        sc.chunk_embs_host.erase(sc.chunk_embs_host.begin(),
+                                 sc.chunk_embs_host.begin() + static_cast<size_t>(drop) * ed);
+        T_diar -= drop;
+    }
+
+    // ---- host concat [spkcache | fifo | chunk_embs] ----
+    const int S        = sc.stream.spkcache_n;
+    const int F        = sc.stream.fifo_n;
+    const int T_concat = S + F + T_diar;
+    sc.concat_host.resize(static_cast<size_t>(T_concat) * ed);
+    std::copy(sc.stream.spkcache.begin(), sc.stream.spkcache.begin() + static_cast<size_t>(S) * ed,
+              sc.concat_host.begin());
+    std::copy(sc.stream.fifo.begin(), sc.stream.fifo.begin() + static_cast<size_t>(F) * ed,
+              sc.concat_host.begin() + static_cast<size_t>(S) * ed);
+    std::copy(sc.chunk_embs_host.begin(), sc.chunk_embs_host.end(),
+              sc.concat_host.begin() + static_cast<size_t>(S + F) * ed);
+
+    // ---- Graph B: xscale + 17 blocks + proj + 18 tf + head ----
+    StreamInferBuild B = build_stream_infer_graph(ctx, hp, chp, conformer, w, backend, T_concat);
+    if (B.graph == nullptr) {
+        transcribe::debug::pop_name_prefix();
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    fill_rel_pos_emb(sc.pos_buf, sc.pos_div_term, 2 * T_concat - 1, ed);
+
+    ggml_backend_sched_reset(sched);
+    if (!ggml_backend_sched_alloc_graph(sched, B.graph)) {
+        transcribe::debug::pop_name_prefix();
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_tensor_set(B.concat_in, sc.concat_host.data(), 0, sc.concat_host.size() * sizeof(float));
+    ggml_backend_tensor_set(B.pos_emb_in, sc.pos_buf.data(), 0, sc.pos_buf.size() * sizeof(float));
+    transcribe::configure_sched_n_threads(sched, n_threads);
+    if (ggml_backend_sched_graph_compute(sched, B.graph) != GGML_STATUS_SUCCESS) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: infer compute failed");
+        transcribe::debug::pop_name_prefix();
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    sc.stream_preds_host.resize(static_cast<size_t>(T_concat) * n_spk);
+    ggml_backend_tensor_get(B.preds, sc.stream_preds_host.data(), 0, sc.stream_preds_host.size() * sizeof(float));
+
+    transcribe::debug::pop_name_prefix();
+
+    // ---- host streaming update (FIFO + AOSC compress) ----
+    streaming_update_sync(sc.stream, P, n_spk, ed, sc.chunk_embs_host, T_diar, sc.stream_preds_host, T_concat, lc, rc);
+    return TRANSCRIBE_OK;
+}
+
 // Streaming AOSC/FIFO forward core (the product path). Chunks the mel per
-// NeMo's streaming_feat_loader, runs Graph A (pre_encode) then Graph B
-// (blocks + proj + transformer + head) over the [spkcache|fifo|chunk]
-// concat, and drives the host streaming_update_sync / _compress_spkcache
-// state machine. Accumulates the T x n_spk probs in sc.stream.total_preds.
+// NeMo's streaming_feat_loader, then drives run_diar_streaming_window per
+// chunk. Accumulates the T x n_spk probs in sc.stream.total_preds.
 // Family-agnostic: also driven by the parakeet multitalker bundle path.
 transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
                                           const SortformerHParams &      hp,
@@ -812,15 +959,13 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
                                           int                            mel_n_mels,
                                           int                            mel_n_frames,
                                           transcribe_session *           abort_session) {
-    const int ed       = chp.enc_d_model;
-    const int n_spk    = hp.max_speakers;
     const int sub      = hp.enc_subsampling_factor;
     const int feat_len = mel_n_frames;
 
     if (sub <= 0 || P.chunk_len <= 0 || sched == nullptr || mel_buf == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    sc.stream.reset(ed);
+    sc.stream.reset(chp.enc_d_model);
 
     const bool external_cadence = P.feat_first_chunk > 0;
     if (external_cadence && (P.chunk_left_context != 0 || P.chunk_right_context != 0)) {
@@ -860,31 +1005,6 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
         }
         const int M = win_hi - win_lo;
 
-        if (sc.compute_ctx != nullptr) {
-            ggml_free(sc.compute_ctx);
-            sc.compute_ctx = nullptr;
-        }
-        {
-            ggml_init_params ip{};
-            ip.mem_size    = 32 * 1024 * 1024;
-            ip.mem_buffer  = nullptr;
-            ip.no_alloc    = true;
-            sc.compute_ctx = ggml_init(ip);
-            if (sc.compute_ctx == nullptr) {
-                return TRANSCRIBE_ERR_GGUF;
-            }
-        }
-        ggml_context * ctx = sc.compute_ctx;
-        transcribe::debug::push_name_prefix("stream.chunk");
-
-        // ---- Graph A: pre_encode over the mel window ----
-        PreEncodeBuild A = build_pre_encode_graph(ctx, chp, conformer.pre_encode, backend, M);
-        if (A.graph == nullptr) {
-            transcribe::debug::pop_name_prefix();
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        int T_diar = static_cast<int>(A.out->ne[1]);
-
         // Mel window [n_mels, M] from full mel [n_mels, feat_len], cols
         // [win_lo, win_hi). ggml ne=[M, n_mels] -> offset mel*M + col.
         sc.chunk_mel_buf.resize(static_cast<size_t>(mel_n_mels) * M);
@@ -893,78 +1013,12 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
             std::copy(src, src + M, sc.chunk_mel_buf.data() + static_cast<size_t>(mel) * M);
         }
 
-        ggml_backend_sched_reset(sched);
-        if (!ggml_backend_sched_alloc_graph(sched, A.graph)) {
-            transcribe::debug::pop_name_prefix();
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st =
+                run_diar_streaming_window(sc, hp, chp, conformer, w, backend, sched, n_threads, P, mel_n_mels,
+                                          sc.chunk_mel_buf.data(), M, lc, rc, drop);
+            st != TRANSCRIBE_OK) {
+            return st;
         }
-        ggml_backend_tensor_set(A.mel_in, sc.chunk_mel_buf.data(), 0, sc.chunk_mel_buf.size() * sizeof(float));
-        transcribe::configure_sched_n_threads(sched, n_threads);
-        if (ggml_backend_sched_graph_compute(sched, A.graph) != GGML_STATUS_SUCCESS) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: pre_encode compute failed");
-            transcribe::debug::pop_name_prefix();
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        sc.chunk_embs_host.resize(static_cast<size_t>(T_diar) * ed);
-        ggml_backend_tensor_get(A.out, sc.chunk_embs_host.data(), 0, sc.chunk_embs_host.size() * sizeof(float));
-
-        // External cadence: discard the duplicated / partially-contexted
-        // pre-encode outputs (NeMo drop_extra_pre_encoded, applied right
-        // after pre_encode and before the encoder).
-        if (drop > 0) {
-            if (T_diar <= drop) {
-                // Degenerate tail chunk: nothing valid to append.
-                transcribe::debug::pop_name_prefix();
-                stt = end;
-                ++chunk_idx;
-                continue;
-            }
-            sc.chunk_embs_host.erase(sc.chunk_embs_host.begin(),
-                                     sc.chunk_embs_host.begin() + static_cast<size_t>(drop) * ed);
-            T_diar -= drop;
-        }
-
-        // ---- host concat [spkcache | fifo | chunk_embs] ----
-        const int S        = sc.stream.spkcache_n;
-        const int F        = sc.stream.fifo_n;
-        const int T_concat = S + F + T_diar;
-        sc.concat_host.resize(static_cast<size_t>(T_concat) * ed);
-        std::copy(sc.stream.spkcache.begin(), sc.stream.spkcache.begin() + static_cast<size_t>(S) * ed,
-                  sc.concat_host.begin());
-        std::copy(sc.stream.fifo.begin(), sc.stream.fifo.begin() + static_cast<size_t>(F) * ed,
-                  sc.concat_host.begin() + static_cast<size_t>(S) * ed);
-        std::copy(sc.chunk_embs_host.begin(), sc.chunk_embs_host.end(),
-                  sc.concat_host.begin() + static_cast<size_t>(S + F) * ed);
-
-        // ---- Graph B: xscale + 17 blocks + proj + 18 tf + head ----
-        StreamInferBuild B = build_stream_infer_graph(ctx, hp, chp, conformer, w, backend, T_concat);
-        if (B.graph == nullptr) {
-            transcribe::debug::pop_name_prefix();
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        fill_rel_pos_emb(sc.pos_buf, sc.pos_div_term, 2 * T_concat - 1, ed);
-
-        ggml_backend_sched_reset(sched);
-        if (!ggml_backend_sched_alloc_graph(sched, B.graph)) {
-            transcribe::debug::pop_name_prefix();
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        ggml_backend_tensor_set(B.concat_in, sc.concat_host.data(), 0, sc.concat_host.size() * sizeof(float));
-        ggml_backend_tensor_set(B.pos_emb_in, sc.pos_buf.data(), 0, sc.pos_buf.size() * sizeof(float));
-        transcribe::configure_sched_n_threads(sched, n_threads);
-        if (ggml_backend_sched_graph_compute(sched, B.graph) != GGML_STATUS_SUCCESS) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: infer compute failed");
-            transcribe::debug::pop_name_prefix();
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        sc.stream_preds_host.resize(static_cast<size_t>(T_concat) * n_spk);
-        ggml_backend_tensor_get(B.preds, sc.stream_preds_host.data(), 0, sc.stream_preds_host.size() * sizeof(float));
-
-        transcribe::debug::pop_name_prefix();
-
-        // ---- host streaming update (FIFO + AOSC compress) ----
-        streaming_update_sync(sc.stream, P, n_spk, ed, sc.chunk_embs_host, T_diar, sc.stream_preds_host, T_concat, lc,
-                              rc);
 
         stt = end;
         ++chunk_idx;
@@ -1071,17 +1125,476 @@ transcribe_status run(transcribe_session *          session,
     return TRANSCRIBE_OK;
 }
 
-// Kind+slot probe. Sortformer ships one RUN-slot extension (the streaming
-// operating-point preset); there is no STREAM-slot surface (no push-audio
-// entry point yet — a future one registers a separate kind).
+// ---- Push-audio streaming session (SFPS, TRANSCRIBE_EXT_SLOT_STREAM) ---
+//
+// Drives run_diar_streaming_window incrementally: raw-PCM and mel tails
+// are trimmed to the next chunk's window each step, so peak memory is the
+// per-chunk graph plus one chunk window of frames regardless of stream
+// length. Window arithmetic is the offline core's verbatim (see the
+// family doc for the feed/finalize scheduling argument). The result rows
+// on the base session hold the committed turns; open (tentative) turns
+// hang off pc->push.tentative.
+
+namespace {
+
+// STFT frames fully supported by arrived samples: frame t reads samples
+// up to t*hop + pad (exclusive). Since pad > hop for this frontend, any
+// frame computable mid-stream is a real (non-masked) frame.
+int64_t push_frames_ready(const SortformerSession::PushStream & ps) {
+    if (ps.total_samples < static_cast<int64_t>(ps.pad)) {
+        return 0;
+    }
+    return (ps.total_samples - static_cast<int64_t>(ps.pad)) / ps.hop + 1;
+}
+
+// Compute all newly-supported mel frames [mel_computed, frames_ready).
+// The mel tail is stored frame-major: frame j at ps.mel[j * n_mels + m],
+// so appending columns is a plain insert (transpose of the [n_mels, n]
+// compute_frames output).
+transcribe_status push_compute_mel(SortformerSession * pc, SortformerModel * pm) {
+    auto &        ps     = pc->push;
+    const int64_t target = push_frames_ready(ps);
+    if (target <= ps.mel_computed) {
+        return TRANSCRIBE_OK;
+    }
+    const int          n_new = static_cast<int>(target - ps.mel_computed);
+    std::vector<float> frames;
+    int                n_mels_out = 0;
+    if (const transcribe_status st = pm->mel->compute_frames(
+            ps.pcm.data(), ps.pcm.size(), ps.pcm_start, ps.total_samples, ps.mel_computed, n_new, frames, n_mels_out);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const size_t k_old = static_cast<size_t>(ps.mel_computed - ps.mel_start);
+    ps.mel.resize((k_old + static_cast<size_t>(n_new)) * static_cast<size_t>(ps.n_mels));
+    for (int i = 0; i < n_new; ++i) {
+        for (int m = 0; m < ps.n_mels; ++m) {
+            ps.mel[(k_old + static_cast<size_t>(i)) * static_cast<size_t>(ps.n_mels) + static_cast<size_t>(m)] =
+                frames[static_cast<size_t>(m) * static_cast<size_t>(n_new) + static_cast<size_t>(i)];
+        }
+    }
+    ps.mel_computed = target;
+    return TRANSCRIBE_OK;
+}
+
+// Trim the raw-PCM tail to what the next uncomputed STFT frame needs
+// (its window plus one sample of pre-emphasis left overlap).
+void push_trim_pcm(SortformerSession * pc) {
+    auto &        ps      = pc->push;
+    const int64_t next_t  = ps.mel_computed;
+    const int64_t need_lo = std::max<int64_t>(0, next_t * ps.hop - ps.pad - (next_t > 0 ? 1 : 0));
+    if (need_lo > ps.pcm_start) {
+        const size_t drop =
+            static_cast<size_t>(std::min<int64_t>(need_lo - ps.pcm_start, static_cast<int64_t>(ps.pcm.size())));
+        ps.pcm.erase(ps.pcm.begin(), ps.pcm.begin() + static_cast<std::ptrdiff_t>(drop));
+        ps.pcm_start += static_cast<int64_t>(drop);
+    }
+}
+
+// Trim the mel tail to what the next chunk's left context needs.
+void push_trim_mel(SortformerSession * pc) {
+    auto &        ps = pc->push;
+    const int64_t keep_from =
+        std::max<int64_t>(0, ps.stt - static_cast<int64_t>(ps.params.chunk_left_context) * ps.sub);
+    if (keep_from <= ps.mel_start) {
+        return;
+    }
+    const size_t drop = static_cast<size_t>(
+        std::min<int64_t>(keep_from - ps.mel_start, static_cast<int64_t>(ps.mel_computed - ps.mel_start)));
+    ps.mel.erase(ps.mel.begin(), ps.mel.begin() + static_cast<std::ptrdiff_t>(drop * static_cast<size_t>(ps.n_mels)));
+    ps.mel_start = keep_from;
+}
+
+// Run one chunk window (offline core formulas verbatim; is_final clips
+// end / right context to the finalized mel length the way the offline
+// loop's last chunks clip to feat_len).
+transcribe_status push_emit_chunk(SortformerSession * pc,
+                                  SortformerModel *   pm,
+                                  bool                is_final,
+                                  int64_t             feat_len,
+                                  bool &              changed) {
+    auto &                         ps  = pc->push;
+    const SortformerStreamParams & P   = ps.params;
+    const int64_t                  sub = ps.sub;
+
+    const int64_t left_offset = std::min<int64_t>(P.chunk_left_context * sub, ps.stt);
+    int64_t       end         = ps.stt + static_cast<int64_t>(P.chunk_len) * sub;
+    if (is_final) {
+        end = std::min<int64_t>(end, feat_len);
+    }
+    int64_t right_offset = static_cast<int64_t>(P.chunk_right_context) * sub;
+    if (is_final) {
+        right_offset = std::min<int64_t>(right_offset, feat_len - end);
+    }
+    const int64_t win_lo = ps.stt - left_offset;
+    const int64_t win_hi = end + right_offset;
+    // Diar-frame context (offline rounding: left exact, right ceil).
+    const int     lc     = static_cast<int>((left_offset + sub / 2) / sub);
+    const int     rc     = static_cast<int>((right_offset + sub - 1) / sub);
+    const int     M      = static_cast<int>(win_hi - win_lo);
+
+    if (win_lo < ps.mel_start || win_hi > ps.mel_computed || M <= 0) {
+        // Scheduling bug guard: the window must already be resident.
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Slice frames [win_lo, win_hi) of the frame-major mel tail into the
+    // [n_mels, M] window buffer the graph expects (bin-major rows).
+    const size_t       off = static_cast<size_t>(win_lo - ps.mel_start);
+    std::vector<float> window(static_cast<size_t>(ps.n_mels) * static_cast<size_t>(M));
+    for (int j = 0; j < M; ++j) {
+        for (int m = 0; m < ps.n_mels; ++m) {
+            window[static_cast<size_t>(m) * static_cast<size_t>(M) + static_cast<size_t>(j)] =
+                ps.mel[(off + static_cast<size_t>(j)) * static_cast<size_t>(ps.n_mels) + static_cast<size_t>(m)];
+        }
+    }
+
+    if (const transcribe_status st = run_diar_streaming_window(
+            pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer, pm->weights, pm->backend.c_str(), pc->sched,
+            pc->n_threads, ps.params, ps.n_mels, window.data(), M, lc, rc, /*drop=*/0);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    ps.stt  = end;
+    changed = true;
+    return TRANSCRIBE_OK;
+}
+
+// Threshold-decode the accumulated probs into closed + open turns (same
+// 0.5-threshold run extraction as probs_to_speaker_segments). Closed
+// turns are returned sorted by (t1_ms, speaker_id, t0_ms) — turn-close
+// order, which makes the committed row set append-only across windows:
+// a turn's closure is detected in the first window containing a frame
+// past its end, so newly closed turns always sort after every already-
+// committed turn. Open turns (run reaching frame T) sort by (t0_ms,
+// speaker_id).
+void decode_stream_turns(const std::vector<float> &                             probs,
+                         int                                                    T,
+                         int                                                    n_spk,
+                         double                                                 ms_per_frame,
+                         float                                                  threshold,
+                         std::vector<transcribe_session::SpeakerSegmentEntry> & closed,
+                         std::vector<transcribe_session::SpeakerSegmentEntry> & open) {
+    closed.clear();
+    open.clear();
+    for (int s = 0; s < n_spk; ++s) {
+        int run_start = -1;
+        for (int t = 0; t < T; ++t) {
+            const bool active = probs[static_cast<size_t>(t) * n_spk + s] > threshold;
+            if (active && run_start < 0) {
+                run_start = t;
+            } else if (!active && run_start >= 0) {
+                transcribe_session::SpeakerSegmentEntry row;
+                row.t0_ms      = static_cast<int64_t>(std::llround(run_start * ms_per_frame));
+                row.t1_ms      = static_cast<int64_t>(std::llround(t * ms_per_frame));
+                row.speaker_id = s + 1;  // 1-based
+                row.p          = std::numeric_limits<float>::quiet_NaN();
+                closed.push_back(row);
+                run_start = -1;
+            }
+        }
+        if (run_start >= 0) {
+            // Still active at the processed edge: the turn may grow with
+            // later audio, so it stays tentative (t1 = the current edge).
+            transcribe_session::SpeakerSegmentEntry row;
+            row.t0_ms      = static_cast<int64_t>(std::llround(run_start * ms_per_frame));
+            row.t1_ms      = static_cast<int64_t>(std::llround(T * ms_per_frame));
+            row.speaker_id = s + 1;
+            row.p          = std::numeric_limits<float>::quiet_NaN();
+            open.push_back(row);
+        }
+    }
+    std::sort(closed.begin(), closed.end(), [](const auto & a, const auto & b) {
+        if (a.t1_ms != b.t1_ms) {
+            return a.t1_ms < b.t1_ms;
+        }
+        if (a.speaker_id != b.speaker_id) {
+            return a.speaker_id < b.speaker_id;
+        }
+        return a.t0_ms < b.t0_ms;
+    });
+    std::sort(open.begin(), open.end(), [](const auto & a, const auto & b) {
+        if (a.t0_ms != b.t0_ms) {
+            return a.t0_ms < b.t0_ms;
+        }
+        return a.speaker_id < b.speaker_id;
+    });
+}
+
+// Re-decode the accumulated probs and refresh the committed / tentative
+// rows. mel_bound is the finalized-or-ready mel frame count (the offline
+// trim's feat_len equivalent). close_open marks runs still active at the
+// edge as final (finalize: the edge is the end of audio, so trailing
+// turns close exactly as the offline extractor closes them at T).
+void push_refresh_rows(SortformerSession * pc,
+                       SortformerModel *   pm,
+                       int64_t             mel_bound,
+                       bool                close_open,
+                       bool &              changed) {
+    auto &        ps             = pc->push;
+    const int     n_spk          = pm->hparams.max_speakers;
+    // Offline trim: total_preds[:, :ceil(feat_len / sub)].
+    const int64_t n_frames_bound = (mel_bound + ps.sub - 1) / ps.sub;
+    const int     used_n         = static_cast<int>(std::min<int64_t>(pc->scratch.stream.total_n, n_frames_bound));
+
+    std::vector<transcribe_session::SpeakerSegmentEntry> closed;
+    decode_stream_turns(pc->scratch.stream.total_preds, used_n, n_spk, ps.ms_per_frame, /*threshold=*/0.5f, closed,
+                        ps.tentative);
+    if (close_open && !ps.tentative.empty()) {
+        // Trailing turns close at the final timestamp; they sort after
+        // every already-closed turn (their t1 is the edge time).
+        closed.insert(closed.end(), ps.tentative.begin(), ps.tentative.end());
+        std::sort(closed.begin(), closed.end(), [](const auto & a, const auto & b) {
+            if (a.t1_ms != b.t1_ms) {
+                return a.t1_ms < b.t1_ms;
+            }
+            if (a.speaker_id != b.speaker_id) {
+                return a.speaker_id < b.speaker_id;
+            }
+            return a.t0_ms < b.t0_ms;
+        });
+        ps.tentative.clear();
+    }
+
+    if (closed.size() != pc->speaker_segments.size()) {
+        changed = true;
+    }
+    pc->speaker_segments     = std::move(closed);
+    pc->n_committed_segments = static_cast<int>(pc->speaker_segments.size());
+    pc->result_kind          = TRANSCRIBE_TIMESTAMPS_NONE;
+    pc->has_result           = true;
+}
+
+}  // namespace
+
+static transcribe_status push_stream_validate(const transcribe_session *       session,
+                                              const transcribe_run_params *    run_params,
+                                              const transcribe_stream_params * stream_params) {
+    (void) session;
+    (void) run_params;
+    if (stream_params == nullptr || stream_params->family == nullptr) {
+        return TRANSCRIBE_OK;  // NULL ext -> family defaults
+    }
+    if (const transcribe_status st =
+            transcribe_ext_check(stream_params->family, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM,
+                                 sizeof(struct transcribe_sortformer_push_stream_ext));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const auto * ext = reinterpret_cast<const transcribe_sortformer_push_stream_ext *>(stream_params->family);
+    switch (ext->preset) {
+        case TRANSCRIBE_SORTFORMER_PRESET_DEFAULT:
+        case TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY:
+        case TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY:
+        case TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY:
+            return TRANSCRIBE_OK;
+    }
+    return TRANSCRIBE_ERR_INVALID_ARG;
+}
+
+static transcribe_status push_stream_begin(transcribe_session *             session,
+                                           const transcribe_run_params *    run_params,
+                                           const transcribe_stream_params * stream_params) {
+    auto * pc = static_cast<SortformerSession *>(session);
+    auto * pm = static_cast<SortformerModel *>(session->model);
+    (void) run_params;
+    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Defense in depth (dispatcher preflight + stream_validate already ran).
+    transcribe_sortformer_preset preset = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+    if (stream_params != nullptr && stream_params->family != nullptr) {
+        if (const transcribe_status st =
+                transcribe_ext_check(stream_params->family, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM,
+                                     sizeof(struct transcribe_sortformer_push_stream_ext));
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        preset = reinterpret_cast<const transcribe_sortformer_push_stream_ext *>(stream_params->family)->preset;
+    }
+
+    const SortformerStreamParams P   = resolve_stream_params(pm->hparams, preset);
+    const int                    sub = pm->hparams.enc_subsampling_factor;
+    if (P.chunk_len <= 0 || P.chunk_left_context < 0 || P.chunk_right_context < 0 || sub <= 0 ||
+        pm->hparams.fe_hop_length <= 0 || pm->hparams.fe_n_fft <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const transcribe_status st = ensure_sched(pc, pm); st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    transcribe::debug::init();
+    pc->push.reset();
+    pc->push.active = true;
+    pc->push.preset = preset;
+    pc->push.params = P;
+    pc->push.ms_per_frame =
+        1000.0 * static_cast<double>(pm->hparams.frame_hop) / static_cast<double>(pm->hparams.fe_sample_rate);
+    pc->push.n_mels = pm->hparams.fe_num_mels;
+    pc->push.sub    = sub;
+    pc->push.hop    = pm->hparams.fe_hop_length;
+    pc->push.pad    = pm->hparams.fe_n_fft / 2;
+    pc->scratch.stream.reset(pm->conformer_hp.enc_d_model);
+    pc->speaker_segments.clear();
+    pc->n_committed_segments = 0;
+    pc->has_result           = false;
+    return TRANSCRIBE_OK;
+}
+
+static transcribe_status push_stream_feed(transcribe_session *       session,
+                                          const float *              pcm,
+                                          int                        n_samples,
+                                          transcribe_stream_update * update) {
+    auto * pc = static_cast<SortformerSession *>(session);
+    auto * pm = static_cast<SortformerModel *>(session->model);
+    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (pc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+
+    auto & ps = pc->push;
+    ps.pcm.insert(ps.pcm.end(), pcm, pcm + n_samples);
+    ps.total_samples += n_samples;
+    pc->stream_audio_input_us = ps.total_samples * 1000000 / pm->hparams.fe_sample_rate;
+
+    bool changed = false;
+    if (const transcribe_status st = push_compute_mel(pc, pm); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    push_trim_pcm(pc);
+
+    // Emit every chunk whose full window (chunk + right context) has
+    // arrived; a feed-time emission implies the offline loop would run
+    // the same chunk with full right context (see the family doc).
+    const int64_t step = static_cast<int64_t>(ps.params.chunk_len) * ps.sub;
+    const int64_t tail = static_cast<int64_t>(ps.params.chunk_right_context) * ps.sub;
+    while (ps.stt + step + tail <= ps.mel_computed) {
+        if (pc->poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+        if (const transcribe_status st = push_emit_chunk(pc, pm, /*is_final=*/false, /*feat_len=*/0, changed);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+    push_trim_mel(pc);
+
+    push_refresh_rows(pc, pm, ps.mel_computed, /*close_open=*/false, changed);
+
+    pc->stream_audio_committed_us = ps.stt * ps.hop * 1000000 / static_cast<int64_t>(pm->hparams.fe_sample_rate);
+    if (update != nullptr) {
+        update->result_changed     = changed;
+        update->input_received_ms  = pc->stream_audio_input_us / 1000;
+        update->audio_committed_ms = pc->stream_audio_committed_us / 1000;
+        update->buffered_ms        = std::max<int64_t>(0, update->input_received_ms - update->audio_committed_ms);
+    }
+    return TRANSCRIBE_OK;
+}
+
+static transcribe_status push_stream_finalize(transcribe_session * session, transcribe_stream_update * update) {
+    auto * pc = static_cast<SortformerSession *>(session);
+    auto * pm = static_cast<SortformerModel *>(session->model);
+    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (pc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+
+    auto &        ps       = pc->push;
+    // Finalized mel length (NeMo ceil semantics) + trailing zero mask.
+    const int64_t feat_len = static_cast<int64_t>(pm->mel->n_frames_for(static_cast<size_t>(ps.total_samples)));
+    const int64_t real_len = static_cast<int64_t>(ps.total_samples / static_cast<uint64_t>(ps.hop));
+    if (feat_len > ps.mel_computed) {
+        if (const int64_t real_target = std::min<int64_t>(real_len, feat_len); real_target > ps.mel_computed) {
+            const int          n_new = static_cast<int>(real_target - ps.mel_computed);
+            std::vector<float> frames;
+            int                n_mels_out = 0;
+            if (const transcribe_status st =
+                    pm->mel->compute_frames(ps.pcm.data(), ps.pcm.size(), ps.pcm_start, ps.total_samples,
+                                            ps.mel_computed, n_new, frames, n_mels_out);
+                st != TRANSCRIBE_OK) {
+                return st;
+            }
+            const size_t k_old = static_cast<size_t>(ps.mel_computed - ps.mel_start);
+            ps.mel.resize((k_old + static_cast<size_t>(n_new)) * static_cast<size_t>(ps.n_mels));
+            for (int i = 0; i < n_new; ++i) {
+                for (int m = 0; m < ps.n_mels; ++m) {
+                    ps.mel[(k_old + static_cast<size_t>(i)) * static_cast<size_t>(ps.n_mels) + static_cast<size_t>(m)] =
+                        frames[static_cast<size_t>(m) * static_cast<size_t>(n_new) + static_cast<size_t>(i)];
+                }
+            }
+            ps.mel_computed = real_target;
+        }
+        if (feat_len > ps.mel_computed) {
+            // Trailing partial frame(s): the zero mask compute() applies.
+            ps.mel.resize(
+                ps.mel.size() + static_cast<size_t>(feat_len - ps.mel_computed) * static_cast<size_t>(ps.n_mels), 0.0f);
+            ps.mel_computed = feat_len;
+        }
+    }
+    push_trim_pcm(pc);
+
+    bool changed = false;
+    while (ps.stt < feat_len) {
+        if (pc->poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+        if (const transcribe_status st = push_emit_chunk(pc, pm, /*is_final=*/true, feat_len, changed);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+    push_trim_mel(pc);
+
+    push_refresh_rows(pc, pm, feat_len, /*close_open=*/true, changed);
+    ps.tentative.clear();  // every open turn closed at the final timestamp
+    ps.active = false;
+
+    pc->stream_audio_committed_us = ps.stt * ps.hop * 1000000 / static_cast<int64_t>(pm->hparams.fe_sample_rate);
+    const int64_t audio_ms        = ps.total_samples * 1000 / pm->hparams.fe_sample_rate;
+    if (update != nullptr) {
+        update->result_changed     = true;
+        update->input_received_ms  = audio_ms;
+        update->audio_committed_ms = audio_ms;
+        update->buffered_ms        = 0;
+    }
+    return TRANSCRIBE_OK;
+}
+
+static void push_stream_reset(transcribe_session * session) {
+    auto * pc = static_cast<SortformerSession *>(session);
+    if (pc == nullptr) {
+        return;
+    }
+    pc->push.reset();
+    // AOSC/FIFO contents are per-utterance; drop them with the tails.
+    if (pc->model != nullptr) {
+        // scratch.stream needs the embedding dim; re-derive it from the
+        // conformer hparams when the model is still attached.
+        auto * pm = static_cast<SortformerModel *>(pc->model);
+        pc->scratch.stream.reset(pm->conformer_hp.enc_d_model);
+    }
+}
+
+// Kind+slot probe. Sortformer ships the RUN-slot operating-point extension
+// (SFST) and the STREAM-slot push-audio extension (SFPS); each kind lives
+// in exactly one slot.
 static bool accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot slot, uint32_t kind) {
     if (model == nullptr) {
         return false;
     }
-    if (slot != TRANSCRIBE_EXT_SLOT_RUN) {
-        return false;
+    switch (slot) {
+        case TRANSCRIBE_EXT_SLOT_RUN:
+            return kind == TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM;
+        case TRANSCRIBE_EXT_SLOT_STREAM:
+            return kind == TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM;
     }
-    return kind == TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM;
+    return false;
 }
 
 // Pre-clear validation for the _RUN slot (see Arch::run_validate): reject a
@@ -1113,11 +1626,11 @@ extern const Arch arch = {
     /* .init_context     = */ init_context,
     /* .run              = */ run,
     /* .run_batch        = */ nullptr,
-    /* .stream_validate  = */ nullptr,
-    /* .stream_begin     = */ nullptr,
-    /* .stream_feed      = */ nullptr,
-    /* .stream_finalize  = */ nullptr,
-    /* .stream_reset     = */ nullptr,
+    /* .stream_validate  = */ push_stream_validate,
+    /* .stream_begin     = */ push_stream_begin,
+    /* .stream_feed      = */ push_stream_feed,
+    /* .stream_finalize  = */ push_stream_finalize,
+    /* .stream_reset     = */ push_stream_reset,
     /* .accepts_ext_kind = */ accepts_ext_kind,
     /* .run_validate     = */ run_validate,
 };
@@ -1138,4 +1651,79 @@ extern "C" void transcribe_sortformer_stream_ext_init(struct transcribe_sortform
     p->ext.size = sizeof(*p);
     p->ext.kind = TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM;
     p->preset   = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+}
+
+extern "C" void transcribe_sortformer_push_stream_ext_init(struct transcribe_sortformer_push_stream_ext * p) {
+    if (p == nullptr) {
+        return;
+    }
+    std::memset(p, 0, sizeof(*p));
+    p->ext.size = sizeof(*p);
+    p->ext.kind = TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM;
+    p->preset   = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+}
+
+// ---------------------------------------------------------------------------
+// Push-stream tentative-turn accessors (global scope, C linkage). The
+// session is downcast via the model's arch name (no RTTI, same pattern as
+// the whisper public accessors); non-sortformer sessions read as empty.
+// ---------------------------------------------------------------------------
+
+namespace transcribe::sortformer {
+namespace {
+
+const SortformerSession * maybe_push_session(const struct transcribe_session * session) {
+    if (session == nullptr || session->model == nullptr || session->model->arch == nullptr) {
+        return nullptr;
+    }
+    const char * name = session->model->arch->name;
+    if (name == nullptr || std::strcmp(name, "sortformer") != 0) {
+        return nullptr;
+    }
+    return static_cast<const SortformerSession *>(session);
+}
+
+}  // namespace
+}  // namespace transcribe::sortformer
+
+extern "C" int transcribe_sortformer_push_stream_n_tentative(const struct transcribe_session * session) {
+    const auto * pc = transcribe::sortformer::maybe_push_session(session);
+    if (pc == nullptr || !pc->push.active) {
+        return 0;
+    }
+    return static_cast<int>(pc->push.tentative.size());
+}
+
+extern "C" transcribe_status transcribe_sortformer_push_stream_get_tentative(const struct transcribe_session * session,
+                                                                             int                               i,
+                                                                             struct transcribe_speaker_segment * out) {
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    // Same minimum-struct rule as transcribe_get_speaker_segment: p is the
+    // last required field (TRANSCRIBE_FIELD_END(transcribe_speaker_segment, p)).
+    constexpr size_t k_min_speaker_segment_size =
+        offsetof(struct transcribe_speaker_segment, p) + sizeof(((struct transcribe_speaker_segment *) 0)->p);
+    if (const auto st = transcribe::check_struct_size(out->struct_size, k_min_speaker_segment_size);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const uint64_t             caller_size = out->struct_size;
+    transcribe_speaker_segment zero{};
+    zero.struct_size = caller_size;
+    transcribe::copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+
+    const auto * pc = transcribe::sortformer::maybe_push_session(session);
+    if (pc == nullptr || !pc->push.active || i < 0 || static_cast<size_t>(i) >= pc->push.tentative.size()) {
+        return TRANSCRIBE_OK;
+    }
+    const auto &               s = pc->push.tentative[static_cast<size_t>(i)];
+    transcribe_speaker_segment staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = s.t0_ms;
+    staged.t1_ms       = s.t1_ms;
+    staged.speaker_id  = s.speaker_id;
+    staged.p           = s.p;
+    transcribe::copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }
