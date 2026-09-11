@@ -24,8 +24,10 @@
 #include <sys/types.h>
 
 #if defined(_WIN32)
+// clang-format off: psapi.h requires windows.h to be included first.
 #    include <windows.h>
 #    include <psapi.h>
+// clang-format on
 #else
 #    include <sys/resource.h>
 #endif
@@ -107,7 +109,7 @@ int64_t peak_rss_bytes() {
 
 int main() {
     const char * env_model = std::getenv("TRANSCRIBE_SORTFORMER_GGUF");
-    const char * env_wav = std::getenv("TRANSCRIBE_SORTFORMER_LONG_WAV");
+    const char * env_wav   = std::getenv("TRANSCRIBE_SORTFORMER_LONG_WAV");
     if (env_model == nullptr || env_model[0] == '\0' || env_wav == nullptr || env_wav[0] == '\0') {
         std::fprintf(stderr,
                      "sortformer_push_stream_long: TRANSCRIBE_SORTFORMER_GGUF / "
@@ -155,12 +157,12 @@ int main() {
     transcribe_run_params_init(&rp);
     transcribe_sortformer_stream_ext run_ext;
     transcribe_sortformer_stream_ext_init(&run_ext);
-    run_ext.preset = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
-    rp.family      = &run_ext.ext;
+    run_ext.preset             = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
+    rp.family                  = &run_ext.ext;
     const auto t_offline_start = std::chrono::steady_clock::now();
     CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_OK);
     const double offline_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_offline_start).count();
-    rp.family = nullptr;
+    rp.family              = nullptr;
     const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(read_segments(session));
     std::printf("offline: %zu rows in %.1f s\n", offline_rows.size(), offline_s);
 
@@ -173,7 +175,7 @@ int main() {
     sp.family = &ext.ext;
     CHECK(transcribe_stream_begin(session, &rp, &sp) == TRANSCRIBE_OK);
 
-    const size_t chunk_samples = static_cast<size_t>(feed_ms) * 16;
+    const size_t chunk_samples  = static_cast<size_t>(feed_ms) * 16;
     int          prev_committed = 0;
     size_t       feeds          = 0;
     const auto   t_start        = std::chrono::steady_clock::now();
@@ -190,7 +192,7 @@ int main() {
         if (committed < prev_committed) {
             std::fprintf(stderr, "FAIL: committed shrank %d -> %d at feed %zu\n", prev_committed, committed, feeds);
         }
-        prev_committed = committed;
+        prev_committed                                     = committed;
         // Rows and committed count agree; ids in range; no future times.
         const std::vector<transcribe_speaker_segment> rows = read_segments(session);
         CHECK(static_cast<int>(rows.size()) == committed);
@@ -201,7 +203,7 @@ int main() {
         }
     }
     CHECK(transcribe_stream_finalize(session, nullptr) == TRANSCRIBE_OK);
-    const double stream_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    const double stream_s        = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
     const double realtime_factor = stream_s > 0.0 ? static_cast<double>(audio_ms) / 1000.0 / stream_s : 0.0;
 
     const std::vector<transcribe_speaker_segment> streamed = sorted_rows(read_segments(session));
@@ -210,7 +212,8 @@ int main() {
     std::printf("peak RSS: %.0f MB\n", peak_rss_bytes() / (1024.0 * 1024.0));
 
     if (!same_rows(streamed, offline_rows)) {
-        std::fprintf(stderr, "FAIL: streamed rows != offline rows (%zu vs %zu)\n", streamed.size(), offline_rows.size());
+        std::fprintf(stderr, "FAIL: streamed rows != offline rows (%zu vs %zu)\n", streamed.size(),
+                     offline_rows.size());
         for (size_t i = 0; i < std::max(streamed.size(), offline_rows.size()); ++i) {
             if (i < streamed.size() && i < offline_rows.size() &&
                 (streamed[i].t0_ms != offline_rows[i].t0_ms || streamed[i].t1_ms != offline_rows[i].t1_ms ||

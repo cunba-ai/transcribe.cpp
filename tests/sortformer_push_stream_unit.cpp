@@ -136,11 +136,11 @@ void dump_rows(const char * tag, const std::vector<transcribe_speaker_segment> &
 // Stream `pcm` through a push-audio session in `chunk_samples` feeds.
 // Returns the committed rows after finalize. Asserts committed
 // monotonicity and the tentative discipline along the way.
-std::vector<transcribe_speaker_segment> run_stream(transcribe_session *        session,
-                                                   const std::vector<float> &  pcm,
-                                                   size_t                      chunk_samples,
+std::vector<transcribe_speaker_segment> run_stream(transcribe_session *         session,
+                                                   const std::vector<float> &   pcm,
+                                                   size_t                       chunk_samples,
                                                    transcribe_sortformer_preset preset,
-                                                   bool &                      saw_tentative) {
+                                                   bool &                       saw_tentative) {
     transcribe_sortformer_push_stream_ext ext;
     transcribe_sortformer_push_stream_ext_init(&ext);
     ext.preset = preset;
@@ -158,10 +158,10 @@ std::vector<transcribe_speaker_segment> run_stream(transcribe_session *        s
     }
     CHECK(transcribe_stream_get_state(session) == TRANSCRIBE_STREAM_ACTIVE);
 
-    int         prev_committed = 0;
-    const size_t total         = pcm.size();
+    int          prev_committed = 0;
+    const size_t total          = pcm.size();
     for (size_t off = 0; off < total; off += chunk_samples) {
-        const int n = static_cast<int>(std::min<size_t>(chunk_samples, total - off));
+        const int                n = static_cast<int>(std::min<size_t>(chunk_samples, total - off));
         transcribe_stream_update update;
         transcribe_stream_update_init(&update);
         if (transcribe_stream_feed(session, pcm.data() + off, n, &update) != TRANSCRIBE_OK) {
@@ -252,10 +252,9 @@ int main() {
     // 1. Kind+slot probe.
     CHECK(transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
                                             TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM));
-    CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN,
-                                             TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM));
-    CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
-                                             TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM));
+    CHECK(
+        !transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM));
+    CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM));
     CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, 0x4E524857u /* WHRN */));
 
     // 2. Init function stamps the header + default.
@@ -310,9 +309,9 @@ int main() {
     // 4. Streaming vs offline parity (1 s feeds).
     bool saw_tentative = false;
     {
-        const size_t one_s = 16000;
-        const std::vector<transcribe_speaker_segment> streamed = sorted_rows(
-            run_stream(session, pcm, one_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
+        const size_t                                  one_s = 16000;
+        const std::vector<transcribe_speaker_segment> streamed =
+            sorted_rows(run_stream(session, pcm, one_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
         if (!same_rows(streamed, offline_rows)) {
             dump_rows("offline", offline_rows);
             dump_rows("streamed", streamed);
@@ -327,12 +326,12 @@ int main() {
     // the tentative discipline is asserted on the LOW_LATENCY stream in
     // check 7, whose 480 ms chunks emit continuously mid-speech.
     {
-        const size_t half_s  = 8000;
-        const size_t ten_s   = 160000;
-        const std::vector<transcribe_speaker_segment> r05 = sorted_rows(
+        const size_t                                  half_s = 8000;
+        const size_t                                  ten_s  = 160000;
+        const std::vector<transcribe_speaker_segment> r05    = sorted_rows(
             run_stream(session, pcm, half_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
-        const std::vector<transcribe_speaker_segment> r10 = sorted_rows(
-            run_stream(session, pcm, ten_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
+        const std::vector<transcribe_speaker_segment> r10 =
+            sorted_rows(run_stream(session, pcm, ten_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
         CHECK(same_rows(r05, offline_rows));
         CHECK(same_rows(r10, offline_rows));
     }
@@ -360,9 +359,9 @@ int main() {
         rp.family     = &run_lo.ext;
         CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_OK);
         const std::vector<transcribe_speaker_segment> lo_offline = sorted_rows(read_segments(session));
-        rp.family = nullptr;
+        rp.family                                                = nullptr;
 
-        bool saw_lo_tentative = false;
+        bool                                          saw_lo_tentative = false;
         const std::vector<transcribe_speaker_segment> lo =
             run_stream(session, pcm, 16000, TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY, saw_lo_tentative);
         CHECK(!lo.empty());
