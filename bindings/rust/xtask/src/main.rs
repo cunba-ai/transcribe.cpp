@@ -68,7 +68,10 @@ fn run_bindgen(check: bool) -> ExitCode {
              (header drift, or this machine's libclang resolves enum underlying types \
              differently). transcribe_dyn.rs is derived from the COMMITTED file so the pair \
              stays consistent; commit the transcribe_sys.rs diff first, then re-run \
-             `cargo xtask bindgen` to refresh transcribe_dyn.rs."
+             `cargo xtask bindgen` to refresh transcribe_dyn.rs.\n\
+             xtask: note — the transcribe_dyn.rs written by THIS run is from the \
+             committed (old) sys world and will NOT match the new transcribe_sys.rs; \
+             the pair only becomes consistent after the second `cargo xtask bindgen` run."
         );
         committed_sys
     };

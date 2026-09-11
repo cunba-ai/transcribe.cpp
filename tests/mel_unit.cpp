@@ -342,6 +342,24 @@ void test_compute_frames_matches_compute() {
             }
             CHECK(mismatches == 0);
         }
+
+        // Whole-range single call, including the masked tail (frames >=
+        // real_frames must come back exactly as compute()'s zeroed
+        // columns). Pins compute_frames' own zero-mask branch directly.
+        std::vector<float> all;
+        int                nm_all  = 0;
+        const int          n_total = mf.n_frames_for(pcm.size());
+        CHECK(mf.compute_frames(pcm.data(), pcm.size(), 0, static_cast<int64_t>(pcm.size()), 0, n_total, all, nm_all) ==
+              TRANSCRIBE_OK);
+        CHECK(all.size() == whole.size());
+        for (size_t i = 0; i < all.size() && i < whole.size(); ++i) {
+            if (all[i] != whole[i]) {
+                std::fprintf(stderr, "FAIL %s:%d: n=%zu whole-range frame %zu: %.9g vs %.9g\n", __FILE__, __LINE__, n,
+                             i, static_cast<double>(all[i]), static_cast<double>(whole[i]));
+                ++g_failures;
+                break;
+            }
+        }
     }
 }
 
