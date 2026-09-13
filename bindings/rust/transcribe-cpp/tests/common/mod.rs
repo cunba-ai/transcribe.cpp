@@ -136,3 +136,19 @@ fn load_wav(path: &std::path::Path) -> Vec<f32> {
         .map(|s| s.expect("wav sample") as f32 / 32768.0)
         .collect()
 }
+
+/// Sortformer diarizer (accepts SORTFORMER_PUSH_STREAM on the stream slot).
+pub fn smoke_sortformer_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
+        "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf",
+    )
+}
+
+/// The committed 2-speaker oracle mix (deterministic), or `None` if absent.
+pub fn smoke_diar_audio() -> Option<Vec<f32>> {
+    let path = std::env::var_os("TRANSCRIBE_SMOKE_DIAR_AUDIO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("samples/sortformer-2spk-mix.wav"));
+    path.is_file().then(|| load_wav(&path))
+}

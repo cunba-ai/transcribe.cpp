@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "7df72bf9e667b8c2"
+PUBLIC_HEADER_HASH = "9740c0c90dd37335"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -88,6 +88,9 @@ TRANSCRIBE_DEVICE_TYPE_CPU = 0
 TRANSCRIBE_DEVICE_TYPE_GPU = 1
 TRANSCRIBE_DEVICE_TYPE_IGPU = 2
 TRANSCRIBE_DEVICE_TYPE_ACCEL = 3
+TRANSCRIBE_VAD_OFF = 0
+TRANSCRIBE_VAD_SILERO = 1
+TRANSCRIBE_VAD_ENERGY = 2
 TRANSCRIBE_FEATURE_INITIAL_PROMPT = 0
 TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK = 1
 TRANSCRIBE_FEATURE_LONG_FORM = 2
@@ -113,6 +116,7 @@ TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1
 TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM = 1414746957
 TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584
 TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912
+TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM = 1397769811
 TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM = 1414743635
 TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM = 1414746710
 TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319
@@ -125,6 +129,10 @@ class transcribe_device_info(_c.Structure):
 class transcribe_model_load_params(_c.Structure):
     pass
 class transcribe_session_params(_c.Structure):
+    pass
+class transcribe_vad_params(_c.Structure):
+    pass
+class transcribe_vad_segment(_c.Structure):
     pass
 class transcribe_run_params(_c.Structure):
     pass
@@ -156,6 +164,8 @@ class transcribe_parakeet_buffered_stream_ext(_c.Structure):
     pass
 class transcribe_sortformer_stream_ext(_c.Structure):
     pass
+class transcribe_sortformer_push_stream_ext(_c.Structure):
+    pass
 class transcribe_voxtral_realtime_stream_ext(_c.Structure):
     pass
 class transcribe_whisper_run_ext(_c.Structure):
@@ -167,7 +177,9 @@ transcribe_ext._fields_ = [("size", _c.c_uint64), ("kind", _c.c_uint32)]
 transcribe_device_info._fields_ = [("struct_size", _c.c_uint64), ("name", _c.c_char_p), ("description", _c.c_char_p), ("kind", _c.c_char_p), ("device_id", _c.c_char_p), ("memory_total", _c.c_uint64), ("memory_free", _c.c_uint64), ("device_type", _c.c_int)]
 transcribe_model_load_params._fields_ = [("struct_size", _c.c_uint64), ("backend", _c.c_int), ("device", _c.c_void_p)]
 transcribe_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int), ("kv_type", _c.c_int), ("n_ctx", _c.c_int32)]
-transcribe_run_params._fields_ = [("struct_size", _c.c_uint64), ("task", _c.c_int), ("timestamps", _c.c_int), ("pnc", _c.c_int), ("itn", _c.c_int), ("diarize", _c.c_int), ("language", _c.c_char_p), ("target_language", _c.c_char_p), ("keep_special_tags", _c.c_bool), ("family", _c.POINTER(transcribe_ext)), ("spec_k_drafts", _c.c_int32)]
+transcribe_vad_params._fields_ = [("struct_size", _c.c_uint64), ("mode", _c.c_int), ("dll_path", _c.c_char_p), ("weight_path", _c.c_char_p), ("backend", _c.c_int), ("device_id", _c.c_int), ("n_threads", _c.c_int), ("max_chunk_ms", _c.c_int64), ("merge_gap_ms", _c.c_int64), ("padding_ms", _c.c_int64), ("silero_threshold", _c.c_float), ("silero_min_speech_ms", _c.c_int64), ("silero_min_silence_ms", _c.c_int64)]
+transcribe_vad_segment._fields_ = [("start_ms", _c.c_int64), ("end_ms", _c.c_int64), ("confidence", _c.c_float)]
+transcribe_run_params._fields_ = [("struct_size", _c.c_uint64), ("task", _c.c_int), ("timestamps", _c.c_int), ("pnc", _c.c_int), ("itn", _c.c_int), ("diarize", _c.c_int), ("language", _c.c_char_p), ("target_language", _c.c_char_p), ("keep_special_tags", _c.c_bool), ("family", _c.POINTER(transcribe_ext)), ("spec_k_drafts", _c.c_int32), ("vad", transcribe_vad_params)]
 transcribe_capabilities._fields_ = [("struct_size", _c.c_uint64), ("native_sample_rate", _c.c_int32), ("n_languages", _c.c_int), ("languages", _c.POINTER(_c.c_char_p)), ("max_timestamp_kind", _c.c_int), ("supports_language_detect", _c.c_bool), ("supports_translate", _c.c_bool), ("supports_streaming", _c.c_bool), ("supports_spec_decode", _c.c_bool), ("max_audio_ms", _c.c_int64), ("n_translate_target_languages", _c.c_int), ("translate_target_languages", _c.POINTER(_c.c_char_p))]
 transcribe_session_limits._fields_ = [("struct_size", _c.c_uint64), ("effective_n_ctx", _c.c_int32), ("effective_max_audio_ms", _c.c_int64), ("max_kv_bytes", _c.c_int64)]
 transcribe_stream_params._fields_ = [("struct_size", _c.c_uint64), ("family", _c.POINTER(transcribe_ext)), ("commit_policy", _c.c_int), ("stable_prefix_agreement_n", _c.c_uint32)]
@@ -182,6 +194,7 @@ transcribe_moonshine_streaming_stream_ext._fields_ = [("ext", transcribe_ext), (
 transcribe_parakeet_stream_ext._fields_ = [("ext", transcribe_ext), ("att_context_right", _c.c_int32)]
 transcribe_parakeet_buffered_stream_ext._fields_ = [("ext", transcribe_ext), ("left_ms", _c.c_int32), ("chunk_ms", _c.c_int32), ("right_ms", _c.c_int32)]
 transcribe_sortformer_stream_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
+transcribe_sortformer_push_stream_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
 transcribe_voxtral_realtime_stream_ext._fields_ = [("ext", transcribe_ext), ("num_delay_tokens", _c.c_int32), ("min_decode_interval_ms", _c.c_int32)]
 transcribe_whisper_run_ext._fields_ = [("ext", transcribe_ext), ("initial_prompt", _c.c_char_p), ("prompt_tokens", _c.POINTER(_c.c_int32)), ("n_prompt_tokens", _c.c_size_t), ("prompt_condition", _c.c_int), ("condition_on_prev_tokens", _c.c_bool), ("max_prev_context_tokens", _c.c_int32), ("temperature", _c.c_float), ("temperature_inc", _c.c_float), ("compression_ratio_thold", _c.c_float), ("logprob_thold", _c.c_float), ("no_speech_thold", _c.c_float), ("seed", _c.c_uint32), ("max_initial_timestamp", _c.c_float)]
 transcribe_whisper_chunk_trace._fields_ = [("struct_size", _c.c_uint64), ("t0_ms", _c.c_int64), ("t1_ms", _c.c_int64), ("temperature_used", _c.c_float), ("compression_ratio", _c.c_float), ("avg_logprob", _c.c_float), ("no_speech_prob", _c.c_float), ("no_speech_triggered", _c.c_bool), ("n_fallbacks", _c.c_int32)]
@@ -212,7 +225,9 @@ STRUCT_LAYOUT = {
     'transcribe_device_info': {'size': 64, 'align': 8, 'offsets': {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56}},
     'transcribe_model_load_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'backend': 8, 'device': 16}},
     'transcribe_session_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16}},
-    'transcribe_run_params': {'size': 72, 'align': 8, 'offsets': {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'diarize': 24, 'language': 32, 'target_language': 40, 'keep_special_tags': 48, 'family': 56, 'spec_k_drafts': 64}},
+    'transcribe_vad_params': {'size': 96, 'align': 8, 'offsets': {'struct_size': 0, 'mode': 8, 'dll_path': 16, 'weight_path': 24, 'backend': 32, 'device_id': 36, 'n_threads': 40, 'max_chunk_ms': 48, 'merge_gap_ms': 56, 'padding_ms': 64, 'silero_threshold': 72, 'silero_min_speech_ms': 80, 'silero_min_silence_ms': 88}},
+    'transcribe_vad_segment': {'size': 24, 'align': 8, 'offsets': {'start_ms': 0, 'end_ms': 8, 'confidence': 16}},
+    'transcribe_run_params': {'size': 168, 'align': 8, 'offsets': {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'diarize': 24, 'language': 32, 'target_language': 40, 'keep_special_tags': 48, 'family': 56, 'spec_k_drafts': 64, 'vad': 72}},
     'transcribe_capabilities': {'size': 56, 'align': 8, 'offsets': {'struct_size': 0, 'native_sample_rate': 8, 'n_languages': 12, 'languages': 16, 'max_timestamp_kind': 24, 'supports_language_detect': 28, 'supports_translate': 29, 'supports_streaming': 30, 'supports_spec_decode': 31, 'max_audio_ms': 32, 'n_translate_target_languages': 40, 'translate_target_languages': 48}},
     'transcribe_session_limits': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'effective_n_ctx': 8, 'effective_max_audio_ms': 16, 'max_kv_bytes': 24}},
     'transcribe_stream_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'family': 8, 'commit_policy': 16, 'stable_prefix_agreement_n': 20}},
@@ -227,6 +242,7 @@ STRUCT_LAYOUT = {
     'transcribe_parakeet_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'att_context_right': 16}},
     'transcribe_parakeet_buffered_stream_ext': {'size': 32, 'align': 8, 'offsets': {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24}},
     'transcribe_sortformer_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
+    'transcribe_sortformer_push_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
     'transcribe_voxtral_realtime_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'num_delay_tokens': 16, 'min_decode_interval_ms': 20}},
     'transcribe_whisper_run_ext': {'size': 80, 'align': 8, 'offsets': {'ext': 0, 'initial_prompt': 16, 'prompt_tokens': 24, 'n_prompt_tokens': 32, 'prompt_condition': 40, 'condition_on_prev_tokens': 44, 'max_prev_context_tokens': 48, 'temperature': 52, 'temperature_inc': 56, 'compression_ratio_thold': 60, 'logprob_thold': 64, 'no_speech_thold': 68, 'seed': 72, 'max_initial_timestamp': 76}},
     'transcribe_whisper_chunk_trace': {'size': 48, 'align': 8, 'offsets': {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'temperature_used': 24, 'compression_ratio': 28, 'avg_logprob': 32, 'no_speech_prob': 36, 'no_speech_triggered': 40, 'n_fallbacks': 44}},
@@ -271,6 +287,8 @@ def configure(lib):
     lib.transcribe_batch_returned_timestamp_kind.argtypes = [_c.c_void_p, _c.c_int]
     lib.transcribe_batch_status.restype = _c.c_int
     lib.transcribe_batch_status.argtypes = [_c.c_void_p, _c.c_int]
+    lib.transcribe_build_id.restype = _c.c_char_p
+    lib.transcribe_build_id.argtypes = []
     lib.transcribe_capabilities_init.restype = None
     lib.transcribe_capabilities_init.argtypes = [_c.POINTER(transcribe_capabilities)]
     lib.transcribe_close.restype = None
@@ -287,6 +305,8 @@ def configure(lib):
     lib.transcribe_device_info_init.argtypes = [_c.POINTER(transcribe_device_info)]
     lib.transcribe_ext_check.restype = _c.c_int
     lib.transcribe_ext_check.argtypes = [_c.POINTER(transcribe_ext), _c.c_uint32, _c.c_uint64]
+    lib.transcribe_free_vad.restype = None
+    lib.transcribe_free_vad.argtypes = [_c.POINTER(transcribe_vad_segment)]
     lib.transcribe_full_text.restype = _c.c_char_p
     lib.transcribe_full_text.argtypes = [_c.c_void_p]
     lib.transcribe_get_model.restype = _c.c_void_p
@@ -377,6 +397,14 @@ def configure(lib):
     lib.transcribe_session_params_init.argtypes = [_c.POINTER(transcribe_session_params)]
     lib.transcribe_set_abort_callback.restype = None
     lib.transcribe_set_abort_callback.argtypes = [_c.c_void_p, _c.CFUNCTYPE(_c.c_bool, _c.c_void_p), _c.c_void_p]
+    lib.transcribe_set_progress_callback.restype = None
+    lib.transcribe_set_progress_callback.argtypes = [_c.c_void_p, _c.CFUNCTYPE(_c.c_int, _c.c_float, _c.c_char_p, _c.c_longlong, _c.c_longlong, _c.c_void_p), _c.c_void_p]
+    lib.transcribe_sortformer_push_stream_ext_init.restype = None
+    lib.transcribe_sortformer_push_stream_ext_init.argtypes = [_c.POINTER(transcribe_sortformer_push_stream_ext)]
+    lib.transcribe_sortformer_push_stream_get_tentative.restype = _c.c_int
+    lib.transcribe_sortformer_push_stream_get_tentative.argtypes = [_c.c_void_p, _c.c_int, _c.POINTER(transcribe_speaker_segment)]
+    lib.transcribe_sortformer_push_stream_n_tentative.restype = _c.c_int
+    lib.transcribe_sortformer_push_stream_n_tentative.argtypes = [_c.c_void_p]
     lib.transcribe_sortformer_stream_ext_init.restype = None
     lib.transcribe_sortformer_stream_ext_init.argtypes = [_c.POINTER(transcribe_sortformer_stream_ext)]
     lib.transcribe_speaker_segment_init.restype = None
@@ -417,6 +445,8 @@ def configure(lib):
     lib.transcribe_token_init.argtypes = [_c.POINTER(transcribe_token)]
     lib.transcribe_tokenize.restype = _c.c_int
     lib.transcribe_tokenize.argtypes = [_c.c_void_p, _c.c_char_p, _c.POINTER(_c.c_int32), _c.c_size_t]
+    lib.transcribe_vad.restype = _c.c_int
+    lib.transcribe_vad.argtypes = [_c.POINTER(_c.c_float), _c.c_int, _c.c_int, _c.POINTER(transcribe_vad_params), _c.POINTER(_c.POINTER(transcribe_vad_segment)), _c.POINTER(_c.c_int64)]
     lib.transcribe_version.restype = _c.c_char_p
     lib.transcribe_version.argtypes = []
     lib.transcribe_version_commit.restype = _c.c_char_p

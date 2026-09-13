@@ -47,6 +47,23 @@ bool file_exists(const std::string & path) {
     return ::stat(path.c_str(), &st) == 0;
 }
 
+// MinGW has no POSIX setenv; MSVC CRT removes a variable via an empty value.
+void set_env(const char * key, const char * value) {
+#if defined(_WIN32)
+    ::_putenv_s(key, value);
+#else
+    ::setenv(key, value, 1);
+#endif
+}
+
+void unset_env(const char * key) {
+#if defined(_WIN32)
+    ::_putenv_s(key, "");
+#else
+    ::unsetenv(key);
+#endif
+}
+
 std::vector<transcribe_speaker_segment> read_segments(const transcribe_session * session) {
     std::vector<transcribe_speaker_segment> rows;
     const int                               n = transcribe_n_speaker_segments(session);
@@ -99,7 +116,7 @@ int main() {
 
     // The parity leg compares the ext path against the env path, so the
     // environment must start clean of the validation overrides.
-    ::unsetenv("TRANSCRIBE_SORTFORMER_STREAM_PRESET");
+    unset_env("TRANSCRIBE_SORTFORMER_STREAM_PRESET");
 
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
@@ -133,10 +150,10 @@ int main() {
     transcribe_run_params_init(&rp);
 
     // Baseline run (env preset path, the DER-validated harness route).
-    ::setenv("TRANSCRIBE_SORTFORMER_STREAM_PRESET", "very_high_latency", 1);
+    set_env("TRANSCRIBE_SORTFORMER_STREAM_PRESET", "very_high_latency");
     CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_OK);
     const std::vector<transcribe_speaker_segment> env_rows = read_segments(session);
-    ::unsetenv("TRANSCRIBE_SORTFORMER_STREAM_PRESET");
+    unset_env("TRANSCRIBE_SORTFORMER_STREAM_PRESET");
     CHECK(!env_rows.empty());  // the oracle mix has two speakers
 
     // 3. Pre-clear rejection preserves the previous result.

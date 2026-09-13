@@ -1365,6 +1365,45 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_sortformer_stream_ext_unit)
     set_tests_properties(transcribe_sortformer_stream_ext_unit PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Sortformer push-audio streaming session (SFPS, STREAM slot).
+    # Kind/slot probe, init stamping, pre-clear rejection with snapshot
+    # preservation, streaming-vs-offline parity, chunk-size invariance,
+    # and tentative->committed convergence on the committed 2-spk oracle
+    # mix. Gated by TRANSCRIBE_SORTFORMER_GGUF (RC 77 skip).
+    add_executable(transcribe_sortformer_push_stream_unit
+        sortformer_push_stream_unit.cpp)
+
+    target_link_libraries(transcribe_sortformer_push_stream_unit
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_sortformer_push_stream_unit PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_sortformer_push_stream_unit)
+
+    add_test(NAME transcribe_sortformer_push_stream_unit
+        COMMAND transcribe_sortformer_push_stream_unit)
+    set_tests_properties(transcribe_sortformer_push_stream_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # Sortformer push-audio long-file soak: full-stream run over a
+    # multi-minute wav (committed monotonicity, global speaker identity,
+    # stream-vs-offline parity, bounded peak RSS). Gated by
+    # TRANSCRIBE_SORTFORMER_GGUF + TRANSCRIBE_SORTFORMER_LONG_WAV
+    # (RC 77 skip).
+    add_executable(transcribe_sortformer_push_stream_long
+        sortformer_push_stream_long.cpp)
+
+    target_link_libraries(transcribe_sortformer_push_stream_long
+        PRIVATE transcribe transcribe-common-example)
+
+    transcribe_apply_warnings(transcribe_sortformer_push_stream_long)
+
+    add_test(NAME transcribe_sortformer_push_stream_long
+        COMMAND transcribe_sortformer_push_stream_long)
+    set_tests_properties(transcribe_sortformer_push_stream_long PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------

@@ -157,6 +157,47 @@ class MelFrontend {
     // Matches NeMo: floor(n_samples / hop_length) + 1.
     int n_frames_for(size_t n_samples) const;
 
+    // Incremental streaming equivalent of compute() for per-frame-
+    // independent frontends: pad_mode == "constant" (zero pad),
+    // normalize == "none" (no cross-frame statistics), and
+    // log_clamp_min == 0 (no whole-buffer log floor). Any other config
+    // returns TRANSCRIBE_ERR_INVALID_ARG.
+    //
+    // Computes mel frames [frame_begin, frame_begin + n_frames) of a
+    // logical stream whose finalized length is total_stream_samples:
+    //   pcm / n_samples / first_sample
+    //       the caller's sample tail, covering stream samples
+    //       [first_sample, first_sample + n_samples). The range must
+    //       include one sample of left overlap (first_sample <=
+    //       frame_begin*hop - n_fft/2 - 1) whenever that index is > 0,
+    //       so per-sample pre-emphasis can see x[i-1]; frame 0 needs no
+    //       overlap. The tail must also reach the right window edge of
+    //       the last non-masked frame. Zero-padding applies outside
+    //       [0, total_stream_samples) exactly as compute()'s constant
+    //       pad, and frames >= floor(total / hop) are the trailing
+    //       zero mask compute() applies for normalize="none" (they are
+    //       emitted zero, not STFT'd). Requesting a frame >=
+    //       n_frames_for(total_stream_samples), or an uncovered window,
+    //       is TRANSCRIBE_ERR_INVALID_ARG.
+    //
+    // The per-frame arithmetic mirrors compute()'s no-BLAS scalar fused
+    // path (same window, FFT, filterbank, log expressions, fp64
+    // accumulation), so on builds without system BLAS the frames are
+    // bit-identical to a whole-buffer compute(); on BLAS/Accelerate
+    // builds the filterbank matmul may differ from sgemm by float
+    // rounding. Single-threaded by design: streaming calls compute at
+    // most one chunk window of frames per feed.
+    //
+    // Output is [num_mels, n_frames] row-major (column = frame).
+    transcribe_status compute_frames(const float *        pcm,
+                                     size_t               n_samples,
+                                     int64_t              first_sample,
+                                     int64_t              total_stream_samples,
+                                     int64_t              frame_begin,
+                                     int                  n_frames,
+                                     std::vector<float> & out_mel,
+                                     int &                out_n_mels) const;
+
     // Read-only accessors for unit tests. Not part of the runtime
     // API; the goal is to validate the precomputed buffers in
     // isolation without running the full pipeline.

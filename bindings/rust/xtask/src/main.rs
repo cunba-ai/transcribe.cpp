@@ -68,7 +68,10 @@ fn run_bindgen(check: bool) -> ExitCode {
              (header drift, or this machine's libclang resolves enum underlying types \
              differently). transcribe_dyn.rs is derived from the COMMITTED file so the pair \
              stays consistent; commit the transcribe_sys.rs diff first, then re-run \
-             `cargo xtask bindgen` to refresh transcribe_dyn.rs."
+             `cargo xtask bindgen` to refresh transcribe_dyn.rs.\n\
+             xtask: note — the transcribe_dyn.rs written by THIS run is from the \
+             committed (old) sys world and will NOT match the new transcribe_sys.rs; \
+             the pair only becomes consistent after the second `cargo xtask bindgen` run."
         );
         committed_sys
     };
@@ -168,8 +171,41 @@ fn generate(root: &Path) -> (String, String) {
     // Normalize to LF: the committed files are LF, and Windows writes can
     // otherwise leak CRLF into the diff.
     let bindings_text = bindings_text.replace("\r\n", "\n");
+    // Normalize enum NewType underlying types to c_uint (see
+    // normalize_enum_newtypes) BEFORE deriving the dyn variant, so both
+    // committed files stay deterministic across regeneration machines.
+    let bindings_text = normalize_enum_newtypes(&bindings_text);
     let dyn_text = derive_dyn(&bindings_text);
     (bindings_text, dyn_text)
+}
+
+/// libclang resolves a C enum's underlying type per platform/ABI — some
+/// Windows libclang builds report c_int where the reference CI toolchains
+/// report c_uint — which would churn the committed bindings on every
+/// regeneration machine. Rewrite the one-line NewType wrapper
+/// `pub struct <Name>(pub ::std::os::raw::c_int);` to c_uint. That exact
+/// wrapper form is unique to enum newtypes in bindgen output (a real
+/// typedef emits `pub type`, an opaque struct a zero-sized field), so the
+/// rewrite is exact, and a no-op wherever libclang already said c_uint.
+fn normalize_enum_newtypes(sys_text: &str) -> String {
+    const FROM: &str = "(pub ::std::os::raw::c_int);";
+    const TO: &str = "(pub ::std::os::raw::c_uint);";
+    let mut out = String::with_capacity(sys_text.len());
+    for line in sys_text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.ends_with(FROM) {
+            let head = trimmed[..trimmed.len() - FROM.len()].trim_end();
+            if head.starts_with("pub struct ") {
+                out.push_str(head);
+                out.push_str(TO);
+                out.push('\n');
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// Derive the `dynload` variant from a `transcribe_sys.rs` text: same banner
