@@ -128,6 +128,11 @@ add_library(transcribe ${_transcribe_lib_type}
     arch/granite/encoder.cpp
     arch/granite/projector.cpp
     arch/granite/decoder.cpp
+    arch/granite5_ctc/model.cpp
+    arch/granite5_ctc/capabilities.cpp
+    arch/granite5_ctc/weights.cpp
+    arch/granite5_ctc/encoder.cpp
+    arch/granite5_ctc/decoder.cpp
     arch/granite_nar/model.cpp
     arch/granite_nar/capabilities.cpp
     arch/granite_nar/weights.cpp
