@@ -241,7 +241,7 @@ transcribe_status fuse_conformer_bn_core(std::vector<pk::ParakeetBlock> & blocks
     ggml_init_params params   = { ctx_size, nullptr, /*no_alloc=*/true };
     *out_ctx                  = ggml_init(params);
     if (*out_ctx == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
     for (size_t i = 0; i < n_blocks; ++i) {
         auto & b              = blocks[i];
@@ -250,7 +250,7 @@ transcribe_status fuse_conformer_bn_core(std::vector<pk::ParakeetBlock> & blocks
     }
     *out_buffer = ggml_backend_alloc_ctx_tensors(*out_ctx, alloc_backend);
     if (*out_buffer == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
     std::vector<float> bn_w(d), bn_b(d), rm(d), rv(d), fused_s(d), fused_b(d);
     for (size_t i = 0; i < n_blocks; ++i) {
@@ -632,7 +632,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -733,7 +733,7 @@ static transcribe_status ensure_sched(SortformerSession * pc, SortformerModel * 
                                            static_cast<int>(pm->plan.scheduler_list.size()),
                                            /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (pc->sched == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     return TRANSCRIBE_OK;
@@ -755,7 +755,7 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
         ip.no_alloc     = true;
         pc->compute_ctx = ggml_init(ip);
         if (pc->compute_ctx == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ggml_context * ctx = pc->compute_ctx;
@@ -791,7 +791,7 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     }
     ggml_backend_sched_reset(pc->sched);
     if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(eb.mel_in, pc->mel_buf.data(), 0, pc->mel_buf.size() * sizeof(float));
@@ -808,7 +808,7 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
     if (ggml_backend_sched_graph_compute(pc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer offline forward: graph_compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     transcribe::debug::dump_tensor("enc.fastconformer.out", eb.out, "encoder");
@@ -856,7 +856,7 @@ static transcribe_status run_diar_streaming_window(DiarStreamScratch &          
         ip.no_alloc    = true;
         sc.compute_ctx = ggml_init(ip);
         if (sc.compute_ctx == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ggml_context * ctx = sc.compute_ctx;
@@ -873,14 +873,14 @@ static transcribe_status run_diar_streaming_window(DiarStreamScratch &          
     ggml_backend_sched_reset(sched);
     if (!ggml_backend_sched_alloc_graph(sched, A.graph)) {
         transcribe::debug::pop_name_prefix();
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(A.mel_in, window_mel, 0, static_cast<size_t>(mel_n_mels) * M * sizeof(float));
     transcribe::configure_sched_n_threads(sched, n_threads);
     if (ggml_backend_sched_graph_compute(sched, A.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: pre_encode compute failed");
         transcribe::debug::pop_name_prefix();
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     sc.chunk_embs_host.resize(static_cast<size_t>(T_diar) * ed);
     ggml_backend_tensor_get(A.out, sc.chunk_embs_host.data(), 0, sc.chunk_embs_host.size() * sizeof(float));
@@ -922,7 +922,7 @@ static transcribe_status run_diar_streaming_window(DiarStreamScratch &          
     ggml_backend_sched_reset(sched);
     if (!ggml_backend_sched_alloc_graph(sched, B.graph)) {
         transcribe::debug::pop_name_prefix();
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(B.concat_in, sc.concat_host.data(), 0, sc.concat_host.size() * sizeof(float));
     ggml_backend_tensor_set(B.pos_emb_in, sc.pos_buf.data(), 0, sc.pos_buf.size() * sizeof(float));
@@ -930,7 +930,7 @@ static transcribe_status run_diar_streaming_window(DiarStreamScratch &          
     if (ggml_backend_sched_graph_compute(sched, B.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: infer compute failed");
         transcribe::debug::pop_name_prefix();
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     sc.stream_preds_host.resize(static_cast<size_t>(T_concat) * n_spk);
     ggml_backend_tensor_get(B.preds, sc.stream_preds_host.data(), 0, sc.stream_preds_host.size() * sizeof(float));
