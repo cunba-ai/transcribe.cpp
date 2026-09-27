@@ -327,9 +327,13 @@ jobs:
       # ── SYCL/DPC++: offline oneAPI installer + Level Zero (llama.cpp pattern) ──
       # Pinned to a known-good oneAPI Essentials offline installer. This URL
       # will eventually rot on Intel's release schedule — swap the constant
-      # below if it 403/Access-Denies. Best-effort (continue-on-error).
+      # below if it 403/Access-Denied. Best-effort (continue-on-error).
+      # timeout-minutes: the 1.1 GB Intel CDN download has stalled mid-transfer
+      # with zero log output (job then hangs until the 6 h job cap); the step
+      # must fail loudly instead. 45 min covers a slow runner + install.
       - name: Download & Install oneAPI
         if: matrix.config.setup == 'sycl'
+        timeout-minutes: 45
         env:
           WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
           WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
