@@ -4030,7 +4030,9 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
-        case GGML_TYPE_Q1_0:
+        // Q1_0 deliberately not reorderable: the dequant-to-fp32/fp16 dispatch
+        // in convert.cpp has no reorder-aware Q1_0 reader, so a rewrite would
+        // corrupt any later non-MMVQ consumer of the same tensor.
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -4047,7 +4049,6 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
     switch (type) {
-        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q2_K:
@@ -4063,7 +4064,6 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
-        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q2_K:
@@ -4690,6 +4690,11 @@ static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_ten
     return g_ggml_sycl_enable_optimize && //allow optimize, controlled by $GGML_SYCL_ENABLE_OPT
            ctx.opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
            dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
+           // never rewrite a tensor that any executed graph has read through GET_ROWS:
+           // the reordered SoA layout is only understood by reorder-aware mul_mat /
+           // dequant kernels, so an in-place rewrite corrupts tied-embedding tables
+           // (embedding shared with the lm_head mul_mat) for later GET_ROWS fetches.
+           ctx.get_rows_sources.find(dst->src[0]->data) == ctx.get_rows_sources.end() &&
            // ne[1] <= 8 so multi-column decode (spec / MTP verify) also bootstraps the reorder;
            // all reorderable types have a _switch_ncols kernel.
            dst->src[1]->ne[1] <= 8 && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
@@ -4812,6 +4817,19 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
 #ifdef SYCL_USE_XMX
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
+
+    // The batch MMQ kernels read the plain AoS block layout. A tensor already
+    // rewritten in place to the reordered SoA layout by an earlier
+    // decode-shaped mul_mat (ne[1] <= 8) would be misread here — e.g. the
+    // second prefill chunk of a multi-turn conversation running after the
+    // first decode step. Fall back to the dequant (reorder-aware) mul_mat
+    // path for such tensors.
+    if (use_mul_mat_q) {
+        ggml_tensor_extra_gpu * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
+        if (src0_extra && src0_extra->optimized_feature.reorder) {
+            use_mul_mat_q = false;
+        }
+    }
 
     // When reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used. For
     // best performance use ESIMD when supported, followed by MMVQ, and finally DMMV.
