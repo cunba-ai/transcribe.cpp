@@ -27,6 +27,7 @@ add_library(transcribe ${_transcribe_lib_type}
     transcribe-mel.cpp
     transcribe-model.cpp
     transcribe-tokenizer.cpp
+    transcribe-prompting.cpp
     transcribe-unicode.cpp
     transcribe-unicode-data.cpp
     transcribe-debug.cpp

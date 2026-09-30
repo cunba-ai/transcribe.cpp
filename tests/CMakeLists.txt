@@ -187,6 +187,22 @@ transcribe_apply_warnings(transcribe_batch_mask_unit)
 add_test(NAME transcribe_batch_mask_unit COMMAND transcribe_batch_mask_unit)
 
 # -----------------------------------------------------------------------------
+# Tekken (Mistral / Voxtral) pretokenizer split (pure host, no model)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_tekken_pretok_unit
+    tekken_pretok_unit.cpp)
+
+target_link_libraries(transcribe_tekken_pretok_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_tekken_pretok_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_tekken_pretok_unit)
+
+add_test(NAME transcribe_tekken_pretok_unit COMMAND transcribe_tekken_pretok_unit)
+
+# -----------------------------------------------------------------------------
 # Chunked-prefill causal mask geometry (pure host, no model)
 
 add_executable(transcribe_prefill_chunk_mask_unit
@@ -1274,6 +1290,22 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_whisper_tokenize_parity)
     set_tests_properties(transcribe_whisper_tokenize_parity PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Voxtral: token ids match mistral-common's Tekkenizer (Tekken
+    # pretokenizer + converter-rebuilt merges). Gated by
+    # TRANSCRIBE_VOXTRAL_GGUF.
+    add_executable(transcribe_voxtral_tokenize_parity
+        voxtral_tokenize_parity.cpp)
+
+    target_link_libraries(transcribe_voxtral_tokenize_parity
+        PRIVATE transcribe)
+
+    transcribe_apply_warnings(transcribe_voxtral_tokenize_parity)
+
+    add_test(NAME transcribe_voxtral_tokenize_parity
+        COMMAND transcribe_voxtral_tokenize_parity)
+    set_tests_properties(transcribe_voxtral_tokenize_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1356,6 +1388,23 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_test(NAME transcribe_qwen3_asr_bpe_parity
         COMMAND transcribe_qwen3_asr_bpe_parity)
     set_tests_properties(transcribe_qwen3_asr_bpe_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # SentencePiece BPE encoder parity (canary2 transcript prefix),
+    # gated on TRANSCRIBE_CANARY_1B_V2_GGUF / TRANSCRIBE_CANARY_FLASH_GGUF.
+    # Expected ids come from the reference sentencepiece library via
+    # scripts/gen_sentencepiece_bpe_fixture.py.
+    add_executable(transcribe_sentencepiece_bpe_parity
+        sentencepiece_bpe_parity.cpp)
+    target_link_libraries(transcribe_sentencepiece_bpe_parity PRIVATE transcribe ggml)
+    target_include_directories(transcribe_sentencepiece_bpe_parity PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(transcribe_sentencepiece_bpe_parity PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_sentencepiece_bpe_parity)
+    add_test(NAME transcribe_sentencepiece_bpe_parity
+        COMMAND transcribe_sentencepiece_bpe_parity)
+    set_tests_properties(transcribe_sentencepiece_bpe_parity PROPERTIES
         SKIP_RETURN_CODE 77)
 
     add_executable(transcribe_qwen3_asr_e2e_smoke

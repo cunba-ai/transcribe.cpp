@@ -152,8 +152,8 @@
  * exactly and refuses to load a native provider that does not match.
  */
 #define TRANSCRIBE_VERSION_MAJOR 0
-#define TRANSCRIBE_VERSION_MINOR 3
-#define TRANSCRIBE_VERSION_PATCH 0
+#define TRANSCRIBE_VERSION_MINOR 2
+#define TRANSCRIBE_VERSION_PATCH 4
 
 #define TRANSCRIBE_VERSION_STRINGIZE_(x) #x
 #define TRANSCRIBE_VERSION_STRINGIZE(x)  TRANSCRIBE_VERSION_STRINGIZE_(x)
@@ -344,27 +344,13 @@ TRANSCRIBE_API const char * transcribe_status_string(int status);
  * Both return borrowed pointers into static storage: never free them, and
  * treat them as valid for the life of the process.
  */
-/* Full build provenance in one string:
- *   "MAJOR.MINOR.PATCH <commit> <branch> <build-time> <backend>"
- * e.g. "0.2.0 8648bbb main 2026-08-03T11:44:53Z cuda". The leading release
- * segment equals the TRANSCRIBE_VERSION macro the caller compiled against; a
- * mismatch means the header and the linked library disagree. <commit> is the
- * short git SHA the library was built from ("unknown" in a non-git build),
- * <branch> the git branch, <build-time> the ISO-8601 UTC configure timestamp,
- * and <backend> the primary build backend tag (cuda/rocm/sycl/vulkan/cpu). */
+/* "MAJOR.MINOR.PATCH", e.g. "0.1.0". Equals the TRANSCRIBE_VERSION macro the
+ * caller compiled against; a mismatch means the header and the linked library
+ * disagree. */
 TRANSCRIBE_API const char * transcribe_version(void);
 /* Short git commit the library was built from, or "unknown" when the build
  * tree carried no git metadata (e.g. an unpacked source tarball). */
 TRANSCRIBE_API const char * transcribe_version_commit(void);
-/*
- * Build-ID string (borrowed pointer into static storage, do NOT free): a single
- * grep-able line "transcribe-build-id: <version> <commit> <branch> <date>".
- * Also embedded verbatim in the binary, so the same value is recoverable from
- * the file alone via `strings <lib> | grep transcribe-build-id` without loading
- * or calling it. <version> mirrors transcribe_version() and the rest come from
- * the configure-time git capture.
- */
-TRANSCRIBE_API const char * transcribe_build_id(void);
 
 /* ----------------------------------------------------------------------- */
 /* ABI metadata                                                            */
@@ -460,9 +446,12 @@ TRANSCRIBE_API void transcribe_log_set(transcribe_log_callback cb, void * userda
 /* Task / timestamps                                                       */
 /* ----------------------------------------------------------------------- */
 
+/* INSTRUCT: transcribe_run_params::prompt is the instruction and the output
+ * is free text (only full_text / raw_text are guaranteed). Offline only. */
 typedef enum {
     TRANSCRIBE_TASK_TRANSCRIBE = 0,
     TRANSCRIBE_TASK_TRANSLATE  = 1,
+    TRANSCRIBE_TASK_INSTRUCT   = 2,
 } transcribe_task;
 
 /*
@@ -1052,8 +1041,9 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  * caller-declared input rate, at which point TRANSCRIBE_ERR_SAMPLE_RATE
  * (currently reserved) will become observable.
  *
- * task:        TRANSCRIBE or TRANSLATE. The model must declare support
- *              for translate via its capabilities; otherwise the run
+ * task:        TRANSCRIBE, TRANSLATE or INSTRUCT. The model must declare
+ *              support for translate via its capabilities, and for
+ *              INSTRUCT via TRANSCRIBE_FEATURE_INSTRUCT; otherwise the run
  *              returns TRANSCRIBE_ERR_UNSUPPORTED_TASK.
  *
  * timestamps:  requested granularity. Default params request AUTO,
@@ -1086,8 +1076,9 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *
  * target_language: target language for translation tasks, or NULL.
  *
- * String-pointer lifetime (language / target_language): caller-owned, and
- * the library copies what it needs before the API call returns. This holds
+ * String-pointer lifetime (language / target_language / vocabulary /
+ * prompt / prefix): caller-owned, and the library copies what it needs
+ * before the API call returns. This holds
  * for transcribe_run / transcribe_run_batch (synchronous) AND for
  * transcribe_stream_begin: the dispatcher copies these strings into
  * session-owned storage at begin, so the caller may free its params —
@@ -1116,111 +1107,30 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *              ext` as field 0. Use transcribe_model_accepts_ext_kind
  *              to probe whether the loaded model accepts a given kind
  *              before pointing `family` at it.
- */
-/* ----------------------------------------------------------------------- */
-/* Voice Activity Detection (optional, via audiocpp.dll at runtime)         */
-/* ----------------------------------------------------------------------- */
-
-/*
- * VAD algorithm selection. VAD is an OPTIONAL preprocessing step before
- * the family decoder: it slices the input PCM into speech-bounded windows
- * so long / sparse audio decodes faster and more accurately. It is OFF by
- * default; enabling it requires audiocpp.dll to be loadable at runtime
- * (see transcribe_vad_params.dll_path discovery order). If VAD cannot load
- * (dll missing / symbol mismatch), transcribe_run silently falls back to
- * the full-buffer decode with a WARN log — VAD is an enhancement, never a
- * hard requirement.
  *
- * Streaming runs (transcribe_stream_*) never use VAD.
+ * spec_k_drafts: speculative-decode draft length for offline runs: -1 is
+ *              the model default, 0 disables it, >0 drafts K tokens per
+ *              verify pass. Ignored unless the model reports
+ *              transcribe_capabilities::supports_spec_decode.
  *
- * NOTE: transcribe_vad / transcribe_free_vad symbols only exist when
- * transcribe.cpp was built with -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1. Calling
- * them against a build without the flag is a link error. The
- * run_params.vad field, by contrast, always exists (parsed as OFF when
- * the flag was off at build time).
- */
-typedef enum {
-    TRANSCRIBE_VAD_OFF    = 0, /* default: full-buffer decode, no VAD */
-    TRANSCRIBE_VAD_SILERO = 1, /* neural VAD via audiocpp.dll (needs model) */
-    TRANSCRIBE_VAD_ENERGY = 2, /* energy/RMS VAD via audiocpp.dll (no model) */
-} transcribe_vad_mode;
-
-/*
- * VAD configuration. Embedded in transcribe_run_params.vad. Zero-init
- * (which transcribe_run_params_init performs) means mode=OFF and all
- * numeric defaults resolved at runtime.
- */
-struct transcribe_vad_params {
-    uint64_t struct_size;     /* sizeof(struct transcribe_vad_params) */
-
-    transcribe_vad_mode mode; /* default OFF */
-
-    const char * dll_path;    /* NULL -> discovery order:
-                             *   1. this field
-                             *   2. env TRANSCRIBE_VAD_DLL
-                             *   3. executable dir
-                             *   4. cwd
-                             *   5. system PATH (LoadLibrary default) */
-
-    const char * weight_path; /* NULL. Reserved for a future non-embedded
-                               * audiocpp.dll; the current dll bakes Silero
-                               * weights in and ignores this. */
-
-    int backend;              /* 0 = CPU; forwarded to audiocpp AUDIOCPP_BACKEND_*.
-                    * The dll ships CPU+CUDA/ROCm/SYCL/Vulkan; pick via this
-                    * field, not by swapping dlls. */
-    int device_id;            /* GPU index; ignored on CPU */
-    int n_threads;            /* 0 = auto */
-
-    int64_t max_chunk_ms;     /* per-window ceiling; <=0 -> family
-                           * effective_max_audio_ms (via
-                           * transcribe_session_get_limits), or 30000 if
-                           * that is 0/unbounded */
-    int64_t merge_gap_ms;     /* default 500; <=0 -> never merge */
-    int64_t padding_ms;       /* default 250; <0 -> 0 */
-
-    /* Silero tuning (SILERO mode only). <=0 / 0 means "use audiocpp
-     * defaults" (threshold 0.5, min_speech 250ms, min_silence 100ms).
-     * Forwarded to audiocpp_vad as an options_json string. */
-    float   silero_threshold;      /* default 0.5; <=0 -> default */
-    int64_t silero_min_speech_ms;  /* default 250; <=0 -> default */
-    int64_t silero_min_silence_ms; /* default 100; <=0 -> default */
-};
-
-/*
- * One speech segment, ms-resolution. Returned by transcribe_vad (the
- * standalone API) and used internally. Caller frees the array with
- * transcribe_free_vad.
- */
-typedef struct transcribe_vad_segment {
-    int64_t start_ms;
-    int64_t end_ms;
-    float   confidence;
-} transcribe_vad_segment;
-
-/*
- * Standalone VAD: detect speech segments without running ASR. Does NOT
- * require a transcribe_session. out_segments is a calloc'd array of
- * *out_n_segments entries; caller owns it and must free with
- * transcribe_free_vad. Returns TRANSCRIBE_OK on success (including when 0
- * segments are found — *out_segments is NULL, *out_n_segments is 0). On
- * VAD failure (dll missing, etc.) returns TRANSCRIBE_ERR_BACKEND; the
- * reason is logged via transcribe_log_set's sink. sample_rate must be 16000.
+ * Generic prompting (vocabulary, prompt, prefix): NULL / 0 / "" means
+ * unused. Each field is gated by the TRANSCRIBE_FEATURE_* bit in
+ * parentheses; limits are in docs/prompting.md.
  *
- * NOTE: only exists when transcribe.cpp was built with
- * -DTRANSCRIBE_VAD_VIA_AUDIOCPP=1; a link error otherwise (see the note
- * above transcribe_vad_mode).
+ * vocabulary / n_vocabulary: custom terms in priority order, formatted for
+ *              the family (VOCABULARY). Ignored with a WARN when
+ *              unsupported.
+ *
+ * prompt:      context text under TRANSCRIBE / TRANSLATE (CONTEXT_PROMPT),
+ *              ignored with a WARN when unsupported; the required
+ *              instruction under INSTRUCT. Plain text only: control-token
+ *              literals are rejected.
+ *
+ * prefix:      transcript text the model continues from
+ *              (TRANSCRIPT_PREFIX). Results hold only the continuation,
+ *              except raw_text. An error when unsupported, and under
+ *              INSTRUCT, batch or streaming.
  */
-TRANSCRIBE_API transcribe_status transcribe_vad(const float *                        pcm,
-                                                int                                  n_samples,
-                                                int                                  sample_rate,
-                                                const struct transcribe_vad_params * vad_params,
-                                                struct transcribe_vad_segment **     out_segments,
-                                                int64_t *                            out_n_segments);
-
-/* Free a segment array returned by transcribe_vad. Safe on NULL. */
-TRANSCRIBE_API void transcribe_free_vad(struct transcribe_vad_segment * segments);
-
 struct transcribe_run_params {
     uint64_t struct_size;
 
@@ -1233,38 +1143,12 @@ struct transcribe_run_params {
     const char *                  target_language;
     bool                          keep_special_tags;
     const struct transcribe_ext * family;
+    int32_t                       spec_k_drafts;
 
-    /*
-     * spec_k_drafts: n-gram-lookup speculative-decode draft length for the
-     *   offline autoregressive decode step. Family-portable strategy knob;
-     *   the family decides how K maps to its internal verify graph.
-     *
-     *   Convention:
-     *     -1: family default (each family picks its tuned K).
-     *      0: spec decoding explicitly disabled — standard 1-token-per-step
-     *         autoregression. Use this for byte-equal reproduction of
-     *         pre-spec behavior or when measuring baseline performance.
-     *     >0: draft K tokens per verify pass. Practical range is 1..8;
-     *         optimal K is hardware-dependent (compute-bound hardware
-     *         prefers small K, bandwidth-bound prefers larger K — see
-     *         docs/models/<family>.md for per-family guidance).
-     *
-     *   Families gate this via transcribe_capabilities::supports_spec_decode.
-     *   Setting spec_k_drafts != -1 on a family with
-     *   supports_spec_decode == false is silently ignored (the run proceeds
-     *   as ordinary autoregression). Probe the capability bit if you want
-     *   to know whether the field will take effect.
-     */
-    int32_t spec_k_drafts;
-
-    /*
-     * vad: optional VAD preprocessing. Zero-initialized by
-     * transcribe_run_params_init, which sets mode=OFF. Callers built
-     * against an older header (smaller struct_size) are detected at
-     * runtime and treated as OFF — VAD never changes behavior for
-     * existing callers. See transcribe_vad_mode / transcribe_vad_params.
-     */
-    struct transcribe_vad_params vad;
+    const char * const * vocabulary;
+    int32_t              n_vocabulary;
+    const char *         prompt;
+    const char *         prefix;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);
@@ -1344,14 +1228,8 @@ struct transcribe_capabilities {
     bool supports_streaming;
 
     /*
-     * supports_spec_decode: gates transcribe_run_params::spec_k_drafts.
-     *   True means the family's offline (transcribe_run / transcribe_run_batch)
-     *   path implements n-gram-lookup speculative decoding. A non-zero
-     *   spec_k_drafts on a model with supports_spec_decode == false is
-     *   silently ignored — the run proceeds as ordinary autoregression. This
-     *   is a soft gate (no error) because spec is purely a performance
-     *   strategy; callers can probe this bit if they want to know whether
-     *   passing K will actually do anything.
+     * supports_spec_decode: the offline path honors
+     *   transcribe_run_params::spec_k_drafts; elsewhere it is ignored.
      */
     bool supports_spec_decode;
 
@@ -1452,9 +1330,10 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *
  * Feature meanings:
  *
- *   INITIAL_PROMPT       The model accepts a free-text or token
- *                        prompt to bias decoding. Today: whisper
- *                        only; reached via transcribe_whisper_run_ext.
+ *   INITIAL_PROMPT       The Whisper run extension's initial_prompt /
+ *                        prompt_tokens (transcribe_whisper_run_ext).
+ *                        For portable prompting use the generic
+ *                        fields and the four bits below.
  *
  *   TEMPERATURE_FALLBACK The model runs a multi-tier temperature loop
  *                        with metric-driven fallback. Today: whisper.
@@ -1493,6 +1372,15 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *                        against a model where this returns false emits
  *                        a WARN and proceeds.
  *
+ *   VOCABULARY           transcribe_run_params::vocabulary takes effect.
+ *
+ *   CONTEXT_PROMPT       transcribe_run_params::prompt conditions
+ *                        TRANSCRIBE / TRANSLATE.
+ *
+ *   INSTRUCT             TRANSCRIBE_TASK_INSTRUCT is available.
+ *
+ *   TRANSCRIPT_PREFIX    transcribe_run_params::prefix is honored.
+ *
  * Returns false on NULL model or unknown feature enum.
  */
 typedef enum {
@@ -1503,6 +1391,10 @@ typedef enum {
     TRANSCRIBE_FEATURE_PNC                  = 4,
     TRANSCRIBE_FEATURE_ITN                  = 5,
     TRANSCRIBE_FEATURE_DIARIZATION          = 6,
+    TRANSCRIBE_FEATURE_VOCABULARY           = 7,
+    TRANSCRIBE_FEATURE_CONTEXT_PROMPT       = 8,
+    TRANSCRIBE_FEATURE_INSTRUCT             = 9,
+    TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX    = 10,
 } transcribe_feature;
 
 TRANSCRIBE_API bool transcribe_model_supports(const struct transcribe_model * model, transcribe_feature feature);
@@ -1815,53 +1707,6 @@ typedef bool (*transcribe_abort_callback)(void * user_data);
 TRANSCRIBE_API void transcribe_set_abort_callback(struct transcribe_session * session,
                                                   transcribe_abort_callback   cb,
                                                   void *                      user_data);
-
-/* ----------------------------------------------------------------------- */
-/* Progress callback                                                        */
-/* ----------------------------------------------------------------------- */
-
-/*
- * Progress callback. Fires during offline transcribe_run() at chunk
- * boundaries (VAD chunk loop today; per-family run() internals in a
- * future phase). Semantics mirror audiocpp_progress_fn so client
- * callback logic is portable between transcribe.cpp and audio.cpp.
- *
- *   progress        [0.0, 1.0]
- *   stage           short label valid for the duration of the call,
- *                   e.g. "asr+whisper". Do not retain the pointer.
- *   completed_units chunks completed so far (0..total_units)
- *   total_units     total chunks (>= 1)
- *   user_data       opaque pointer from transcribe_set_progress_callback
- *
- * Return 0 to continue; non-zero to request cancellation. On cancel the
- * in-flight run aborts at the next chunk boundary, preserves partial
- * segments, and transcribe_run returns TRANSCRIBE_ERR_ABORTED. Cancel
- * via this callback and via transcribe_set_abort_callback are equivalent
- * end states; both are offered so client logic need not differ between
- * transcribe.cpp and audio.cpp.
- *
- * The callback is invoked synchronously on the thread that called
- * transcribe_run. It must not throw (a thrown exception is treated as a
- * cancel request and contained at the emission site, never escaping the
- * C ABI). Do not call transcribe_* APIs from inside the callback.
- */
-typedef int (*transcribe_progress_callback)(float        progress,
-                                            const char * stage,
-                                            int64_t      completed_units,
-                                            int64_t      total_units,
-                                            void *       user_data);
-
-/*
- * Install or clear the progress callback for a session. Passing cb=NULL
- * clears a previously installed callback. Safe to call before or between
- * runs; not concurrent with a run on the same session. The callback
- * fires during subsequent transcribe_run() calls. Streaming runs
- * (transcribe_stream_*) do NOT fire this callback — streaming progress
- * remains pull-based via transcribe_stream_update.
- */
-TRANSCRIBE_API void transcribe_set_progress_callback(struct transcribe_session *  session,
-                                                     transcribe_progress_callback cb,
-                                                     void *                       user_data);
 
 /*
  * True if the most recent transcribe_run was aborted by the installed
