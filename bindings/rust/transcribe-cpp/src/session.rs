@@ -43,6 +43,12 @@ pub struct RunOptions {
     pub spec_k_drafts: i32,
     /// Optional family-specific run extension (e.g. whisper decode knobs).
     pub family: Option<RunExtension>,
+    /// Optional VAD preprocessing. `None` / [`VadMode::Off`](crate::VadMode::Off)
+    /// (the default) runs the full-buffer decode; setting a mode enables the
+    /// VAD chunk loop (requires the native library built with
+    /// `-DTRANSCRIBE_VAD_VIA_AUDIOCPP=ON` AND audiocpp loadable at runtime —
+    /// otherwise silently degrades to full-buffer). Streaming runs ignore it.
+    pub vad: crate::vad::VadOptions,
     /// Custom terms in priority order, formatted per family
     /// (`Feature::Vocabulary`; ignored with a warning elsewhere).
     pub vocabulary: Vec<String>,
@@ -69,6 +75,10 @@ impl Default for RunOptions {
             keep_special_tags: false,
             spec_k_drafts: -1,
             family: None,
+            vad: crate::vad::VadOptions {
+                mode: crate::vad::VadMode::Off,
+                ..Default::default()
+            },
             vocabulary: Vec::new(),
             prompt: None,
             prefix: None,
@@ -85,6 +95,9 @@ pub struct Session {
     // Retained so the abort callback's userdata pointer stays valid while
     // installed. `None` when no cancel token is set.
     cancel: Option<Arc<AtomicBool>>,
+    // Retained so the progress callback's userdata pointer (the *const Arc)
+    // stays valid while installed. `None` when no progress callback is set.
+    progress: Option<crate::progress::ProgressCallbackCb>,
 }
 
 impl std::fmt::Debug for Session {
@@ -122,6 +135,7 @@ impl Session {
             ptr: out,
             model: Arc::clone(&model.inner),
             cancel: None,
+            progress: None,
         })
     }
 
@@ -146,6 +160,36 @@ impl Session {
         self.cancel = None;
     }
 
+    /// Install a [`ProgressCallback`] to receive chunk-level progress during
+    /// the next `run`. Replaces any previously installed callback. The callback
+    /// fires synchronously on the run thread between chunks; returning
+    /// [`ProgressAction::Cancel`](crate::ProgressAction::Cancel) from it aborts
+    /// the run at the next chunk boundary (equivalent to a cancel token).
+    ///
+    /// Streaming runs do NOT fire this callback. Install before `run`, not
+    /// concurrently with one (single-threaded session contract).
+    pub fn set_progress_callback(&mut self, callback: &crate::progress::ProgressCallback) {
+        let cb = Arc::clone(&callback.cb);
+        let userdata = Arc::as_ptr(&cb) as *mut c_void;
+        // SAFETY: single-threaded session contract — no run is in flight. The
+        // new callback is installed before the old retained Arc drops, so the
+        // previous userdata is never dangling-referenced.
+        unsafe {
+            sys::transcribe_set_progress_callback(
+                self.ptr,
+                Some(crate::progress::progress_trampoline),
+                userdata,
+            )
+        };
+        self.progress = Some(cb);
+    }
+
+    /// Remove any installed progress callback.
+    pub fn clear_progress_callback(&mut self) {
+        unsafe { sys::transcribe_set_progress_callback(self.ptr, None, std::ptr::null_mut()) };
+        self.progress = None;
+    }
+
     /// Whether the most recent run/stream was ended by cancellation.
     pub fn was_aborted(&self) -> bool {
         unsafe { sys::transcribe_was_aborted(self.ptr) }
@@ -164,7 +208,7 @@ impl Session {
     /// transcript is preserved on the returned [`Error::Aborted`] /
     /// [`Error::OutputTruncated`] / [`Error::OutputRepetition`].
     pub fn run(&mut self, pcm: &[f32], options: &RunOptions) -> Result<Transcript> {
-        let (params, _lang, _target, _family, _prompting) = build_run_params(options)?;
+        let (params, _lang, _target, _family, _vad_dll, _prompting) = build_run_params(options)?;
         let n = clamp_len(pcm.len())?;
 
         // The compute path is serialized per model; hold the lock for the native
@@ -208,7 +252,7 @@ impl Session {
         pcms: &[&[f32]],
         options: &RunOptions,
     ) -> Result<Vec<Result<Transcript>>> {
-        let (params, _lang, _target, _family, _prompting) = build_run_params(options)?;
+        let (params, _lang, _target, _family, _vad_dll, _prompting) = build_run_params(options)?;
         let ptrs: Vec<*const f32> = pcms.iter().map(|p| p.as_ptr()).collect();
         let lens: Vec<i32> = pcms
             .iter()
@@ -286,7 +330,7 @@ impl Session {
     /// Dropping the returned `Stream` abandons it and returns the session to
     /// idle.
     pub fn stream(&mut self, run: &RunOptions, stream: &StreamOptions) -> Result<Stream<'_>> {
-        let (run_params, _lang, _target, _family, _prompting) = build_run_params(run)?;
+        let (run_params, _lang, _target, _family, _vad_dll, _prompting) = build_run_params(run)?;
         let (stream_params, _stream_family) = build_stream_params(stream);
         {
             // Claim the model's compute lease for the whole stream lifetime: a
@@ -442,6 +486,7 @@ type RunParamsBundle = (
     Option<CString>,
     Option<CString>,
     Option<RunExtRaw>,
+    Option<CString>,   // vad dll_path keepalive
     PromptingKeepalive,
 );
 
@@ -480,6 +525,13 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
         .transpose()?;
     params.family = family.as_ref().map_or(std::ptr::null(), |f| f.ext_ptr());
 
+    // VAD: copy the C vad params (which borrow a dll_path CString) onto the
+    // run_params struct; the CString keepalive (5th bundle slot) outlives the
+    // native call. struct_size is set by to_c; the C side reads mode==OFF as
+    // "no VAD" so a never-touched default is inert.
+    let (vad_params, vad_dll) = o.vad.to_c();
+    params.vad = vad_params;
+
     let terms = o
         .vocabulary
         .iter()
@@ -503,7 +555,7 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
         _prefix: prefix,
     };
 
-    Ok((params, lang, target, family, prompting))
+    Ok((params, lang, target, family, vad_dll, prompting))
 }
 
 /// PCM/utterance lengths cross the ABI as `int`; reject anything that overflows.
@@ -645,6 +697,40 @@ impl Stream<'_> {
         unsafe { sys::transcribe_stream_text_init(&mut raw) };
         let _ = unsafe { sys::transcribe_stream_get_text(self.session.ptr, &mut raw) };
         StreamText::from_raw(&raw)
+    }
+
+    /// The committed speaker turns of a diarization stream (sortformer).
+    ///
+    /// Committed rows are append-only for the stream's life: their count
+    /// never shrinks, timestamps are absolute ms from stream start, and
+    /// speaker ids are global (arrival order). After
+    /// [`finalize`](Self::finalize) this is the full segmentation.
+    /// `Vec` copies — safe to hold across the next feed.
+    pub fn speaker_segments(&self) -> Vec<SpeakerSegment> {
+        let n = unsafe { sys::transcribe_n_speaker_segments(self.session.ptr) };
+        (0..n).map(|i| self.session.speaker_segment(i)).collect()
+    }
+
+    /// The tentative (still-open) speaker turns of a diarization stream —
+    /// at most one per speaker, subject to extension or revision by later
+    /// feeds. Empty after [`finalize`](Self::finalize), which closes every
+    /// open turn into the committed set. `Vec` copies.
+    pub fn tentative_speaker_segments(&self) -> Vec<SpeakerSegment> {
+        let n = unsafe { sys::transcribe_sortformer_push_stream_n_tentative(self.session.ptr) };
+        (0..n)
+            .map(|i| {
+                let mut raw: sys::transcribe_speaker_segment = unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_speaker_segment_init(&mut raw) };
+                let _ = unsafe {
+                    sys::transcribe_sortformer_push_stream_get_tentative(
+                        self.session.ptr,
+                        i,
+                        &mut raw,
+                    )
+                };
+                SpeakerSegment::from_raw(&raw)
+            })
+            .collect()
     }
 
     /// A full structured snapshot (segments/words/tokens) of the current
