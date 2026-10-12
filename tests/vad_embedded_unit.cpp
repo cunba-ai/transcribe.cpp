@@ -43,15 +43,15 @@ int g_failures = 0;
 // non-speech, so a "loud sine/noise burst" alone would detect nothing; this
 // surrogate reliably yields one segment covering the burst. The burst
 // boundaries in samples are what the segment-bounds assertion refers to.
-constexpr int  kSilenceHead = 8000;
-constexpr int  kBurst       = 16000;
-constexpr int  kSilenceTail = 8000;
+constexpr int kSilenceHead = 8000;
+constexpr int kBurst       = 16000;
+constexpr int kSilenceTail = 8000;
 
 std::vector<float> signal() {
     std::vector<float> v(kSilenceHead + kBurst + kSilenceTail);
     uint32_t           seed = 98765;
     for (size_t i = 0; i < v.size(); ++i) {
-        seed      = seed * 1664525u + 1013904223u;
+        seed              = seed * 1664525u + 1013904223u;
         const float noise = (static_cast<float>(seed >> 8) / 16777216.0f - 0.5f) * 0.01f;
         const bool  burst = i >= kSilenceHead && i < kSilenceHead + kBurst;
         if (burst) {
@@ -60,7 +60,7 @@ std::vector<float> signal() {
             const float harm = std::sin(6.2831853f * 140.0f * t) + 0.5f * std::sin(6.2831853f * 280.0f * t) +
                                0.25f * std::sin(6.2831853f * 560.0f * t) + 0.3f * std::sin(6.2831853f * 1820.0f * t) +
                                0.2f * std::sin(6.2831853f * 3360.0f * t);
-            v[i] = noise + 0.4f * env * harm;
+            v[i]             = noise + 0.4f * env * harm;
         } else {
             v[i] = noise;
         }
@@ -110,7 +110,7 @@ void test_embedded_load_and_run() {
     // must reach into both halves of the burst region.
     const int64_t burst_lo = kSilenceHead + kBurst / 4;
     const int64_t burst_hi = kSilenceHead + 3 * kBurst / 4;
-    bool         covers    = false;
+    bool          covers   = false;
     for (int i = 0; i < r.n_segments; ++i) {
         transcribe_vad_segment seg;
         transcribe_vad_segment_init(&seg);
@@ -130,7 +130,7 @@ void test_embedded_load_and_run() {
     // with BAD_STRUCT_SIZE and *out_model stays NULL.
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CPU;
+    mp.backend            = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * m2 = nullptr;
     CHECK(transcribe_model_load_embedded_vad(&mp, &m2) == TRANSCRIBE_OK);
     CHECK(m2 != nullptr);
