@@ -4,32 +4,20 @@
 //! `tests/vad.rs` — this needs no fixture and runs wherever the library is
 //! loaded. In `dynload` posture without a loaded library it skips cleanly.
 
-use transcribe_cpp::{init_backends_default, Backend, Model, ModelOptions, Role, VadOptions};
+mod common;
 
-fn maybe_library_loaded(test: &str) -> bool {
-    #[cfg(feature = "dynload")]
-    {
-        // The trampolines would return type-shaped errors through a null
-        // table; the skip keeps that indistinguishable-from-failure mode
-        // out of this test.
-        if !transcribe_cpp::is_dynamic_loaded() {
-            eprintln!("skip {test}: native library not loaded (dynload posture)");
-            return false;
-        }
-    }
-    #[cfg(not(feature = "dynload"))]
-    {
-        let _ = test;
-    }
-    init_backends_default().expect("init_backends_default");
-    true
-}
+use transcribe_cpp::{Backend, Model, ModelOptions, Role, VadOptions};
 
 #[test]
 fn embedded_vad_load_info_run() {
-    if !maybe_library_loaded("embedded_vad_load_info_run") {
+    // The trampolines would return type-shaped errors through a null table;
+    // the skip keeps that indistinguishable-from-failure mode out of this
+    // test (common::library_loaded, shared with the fixture resolvers).
+    if !common::library_loaded() {
+        eprintln!("skip embedded_vad_load_info_run: native library not loaded (dynload posture)");
         return;
     }
+    common::ensure_backends();
 
     let opts = ModelOptions {
         backend: Backend::Cpu,

@@ -14,8 +14,9 @@ use std::sync::Once;
 /// in compiled-in (static / plain `shared`) builds; in a `dynamic-backends`
 /// build it loads the per-ISA CPU / GPU modules the native build installed —
 /// without it a model load in that posture finds zero devices. Folded into the
-/// fixture resolvers below so every model-gated test gets it for free.
-fn ensure_backends() {
+/// fixture resolvers below so every model-gated test gets it for free;
+/// fixture-less tests (e.g. the embedded VAD) call it directly.
+pub fn ensure_backends() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         transcribe_cpp::init_backends_default().expect("init_backends_default");
@@ -128,23 +129,22 @@ pub fn smoke_itn_model() -> Option<PathBuf> {
 
 /// Sortformer diarizer (DIARIZE + stream-session ASR role) plus its
 /// two-speaker sample, or `None` (with a skip note) when either is absent.
-/// Set `TRANSCRIBE_SMOKE_SORTFORMER_MODEL` to point anywhere (e.g. a copy
-/// under a consumer's models dir); the default resolves the repo-local
-/// `models/diar_streaming_sortformer_4spk-v2.1/` download.
+/// Composed from [`smoke_sortformer_model`] + [`smoke_diar_audio`] so the
+/// one audio env contract (`TRANSCRIBE_SMOKE_DIAR_AUDIO`) covers every
+/// sortformer test; set `TRANSCRIBE_SMOKE_SORTFORMER_MODEL` to point the
+/// model anywhere (e.g. a copy under a consumer's models dir).
 pub fn smoke_sortformer_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
     if !library_loaded() {
         eprintln!("skip {test}: native library not loaded (dynload posture)");
         return None;
     }
-    let model = family_model(
-        "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
-        "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf",
-    );
-    let audio = repo_root().join("samples/sortformer-2spk-mix.wav");
-    match model {
-        Some(m) if audio.is_file() => Some((m, load_wav(&audio))),
+    match (smoke_sortformer_model(), smoke_diar_audio()) {
+        (Some(m), Some(a)) => Some((m, a)),
         _ => {
-            eprintln!("skip {test}: sortformer model/audio absent (set TRANSCRIBE_SMOKE_SORTFORMER_MODEL)");
+            eprintln!(
+                "skip {test}: sortformer model/audio absent (set TRANSCRIBE_SMOKE_SORTFORMER_MODEL / \
+                 TRANSCRIBE_SMOKE_DIAR_AUDIO)"
+            );
             None
         }
     }
