@@ -22,6 +22,21 @@ fn ensure_backends() {
     });
 }
 
+/// True when the native library is usable for model loads. In a `dynload`
+/// build without a loaded library the trampolines return type-shaped errors
+/// through a null table, which is indistinguishable from a real failure —
+/// model-gated tests skip instead (see tests/vad_embedded.rs).
+pub fn library_loaded() -> bool {
+    #[cfg(feature = "dynload")]
+    {
+        transcribe_cpp::is_dynamic_loaded()
+    }
+    #[cfg(not(feature = "dynload"))]
+    {
+        true
+    }
+}
+
 /// Repo root: walk up from this crate until we find the marker that only the
 /// repo root carries (immune to how deep the crate dir is nested).
 pub fn repo_root() -> PathBuf {
@@ -111,9 +126,16 @@ pub fn smoke_itn_model() -> Option<PathBuf> {
     )
 }
 
-/// Sortformer diarizer (DIARIZE role only) plus its two-speaker sample, or
-/// `None` (with a skip note) when either is absent.
+/// Sortformer diarizer (DIARIZE + stream-session ASR role) plus its
+/// two-speaker sample, or `None` (with a skip note) when either is absent.
+/// Set `TRANSCRIBE_SMOKE_SORTFORMER_MODEL` to point anywhere (e.g. a copy
+/// under a consumer's models dir); the default resolves the repo-local
+/// `models/diar_streaming_sortformer_4spk-v2.1/` download.
 pub fn smoke_sortformer_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
+    if !library_loaded() {
+        eprintln!("skip {test}: native library not loaded (dynload posture)");
+        return None;
+    }
     let model = family_model(
         "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
         "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf",
@@ -199,7 +221,11 @@ pub fn load_wav(path: &std::path::Path) -> Vec<f32> {
 }
 
 /// Sortformer diarizer (accepts SORTFORMER_PUSH_STREAM on the stream slot).
+/// Skips in the dynload posture until the native library is loaded.
 pub fn smoke_sortformer_model() -> Option<PathBuf> {
+    if !library_loaded() {
+        return None;
+    }
     family_model(
         "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
         "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf",

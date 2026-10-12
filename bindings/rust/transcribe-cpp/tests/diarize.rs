@@ -10,23 +10,29 @@ use transcribe_cpp::{
 };
 
 #[test]
-fn sortformer_is_diarize_only() {
-    let Some((model_path, _)) = common::smoke_sortformer_fixtures("sortformer_is_diarize_only")
+fn sortformer_serves_diarize_and_stream_session() {
+    let Some((model_path, _)) =
+        common::smoke_sortformer_fixtures("sortformer_serves_diarize_and_stream_session")
     else {
         return;
     };
     let model = Model::load(&model_path).unwrap();
+    // DIARIZE (offline diarize_*) + the ASR session surface the push-audio
+    // streaming extension lives on (session() + stream() with
+    // StreamExtension::Sortformer; see tests/family.rs). One-shot ASR runs
+    // on this model are NOT_IMPLEMENTED (no run hook) — pinned in C by
+    // tests/sortformer_push_stream_unit.cpp.
     let roles = model.roles();
-    assert!(!roles.contains(Role::Asr) && roles.contains(Role::Diarize));
+    assert!(roles.contains(Role::Diarize) && roles.contains(Role::Asr));
     let info = model.diarize_info().unwrap();
     assert_eq!((info.sample_rate, info.max_speakers), (16000, 4));
     assert!(model.accepts_ext(ExtSlot::DiarizeRun, SFDR));
     assert!(!model.accepts_ext(ExtSlot::Run, SFDR));
-    assert!(matches!(
-        model.capabilities(),
-        Err(Error::UnsupportedRole(_))
-    ));
-    assert!(matches!(model.session(), Err(Error::UnsupportedRole(_))));
+    assert!(model.capabilities().unwrap().supports_streaming);
+    let session = model.session();
+    assert!(session.is_ok(), "push-stream session surface: {session:?}");
+    drop(session);
+    assert!(model.diarize_session().is_ok());
 }
 
 #[test]
