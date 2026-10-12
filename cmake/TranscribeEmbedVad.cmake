@@ -113,8 +113,17 @@ else()
     endif()
     if(_vad_have)
         # Record the verified digest next to the cache so humans (and the
-        # next configure) can see why the download was skipped.
-        file(WRITE "${_vad_cache}.sha256" "${TRANSCRIBE_EMBED_VAD_MODEL_SHA256}")
+        # next configure) can see why the download was skipped. Read before
+        # writing: an unchanged sidecar is left untouched, so reconfigures
+        # do not bump its mtime.
+        set(_vad_sidecar "${_vad_cache}.sha256")
+        set(_vad_sidecar_cur "")
+        if(EXISTS "${_vad_sidecar}")
+            file(READ "${_vad_sidecar}" _vad_sidecar_cur)
+        endif()
+        if(NOT _vad_sidecar_cur STREQUAL "${TRANSCRIBE_EMBED_VAD_MODEL_SHA256}")
+            file(WRITE "${_vad_sidecar}" "${TRANSCRIBE_EMBED_VAD_MODEL_SHA256}")
+        endif()
         set(_vad_gguf "${_vad_cache}")
     endif()
 endif()
