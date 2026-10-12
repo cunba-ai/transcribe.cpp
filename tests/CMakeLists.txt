@@ -1452,6 +1452,8 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         sortformer_diarize_unit.cpp)
     target_link_libraries(transcribe_sortformer_diarize_unit
         PRIVATE transcribe transcribe-common-example)
+    target_include_directories(transcribe_sortformer_diarize_unit PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})  # tests/diar_rows.h row fixtures
     target_compile_definitions(transcribe_sortformer_diarize_unit PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
     transcribe_apply_warnings(transcribe_sortformer_diarize_unit)
@@ -1503,6 +1505,9 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     target_link_libraries(transcribe_sortformer_push_stream_unit
         PRIVATE transcribe transcribe-common-example)
 
+    target_include_directories(transcribe_sortformer_push_stream_unit PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})  # tests/diar_rows.h row fixtures
+
     target_compile_definitions(transcribe_sortformer_push_stream_unit PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
 
@@ -1523,6 +1528,9 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 
     target_link_libraries(transcribe_sortformer_push_stream_long
         PRIVATE transcribe transcribe-common-example)
+
+    target_include_directories(transcribe_sortformer_push_stream_long PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})  # tests/diar_rows.h row fixtures
 
     transcribe_apply_warnings(transcribe_sortformer_push_stream_long)
 

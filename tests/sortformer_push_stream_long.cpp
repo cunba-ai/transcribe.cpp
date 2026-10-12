@@ -16,8 +16,8 @@
 // TRANSCRIBE_SORTFORMER_LONG_WAV (audio). TRANSCRIBE_SORTFORMER_LONG_FEED_MS
 // optionally overrides the feed size (default 1000 ms).
 
+#include "diar_rows.h"
 #include "transcribe.h"
-#include "transcribe/diarize.h"
 #include "transcribe/sortformer.h"
 #include "wav.h"
 
@@ -52,45 +52,13 @@ int g_failures = 0;
         }                                                                        \
     } while (0)
 
-bool file_exists(const std::string & path) {
-    struct stat st{};
-    return ::stat(path.c_str(), &st) == 0;
-}
-
-std::vector<transcribe_speaker_segment> read_segments(const transcribe_session * session) {
-    std::vector<transcribe_speaker_segment> rows;
-    const int                               n = transcribe_n_speaker_segments(session);
-    for (int i = 0; i < n; ++i) {
-        transcribe_speaker_segment row;
-        transcribe_speaker_segment_init(&row);
-        if (transcribe_get_speaker_segment(session, i, &row) == TRANSCRIBE_OK) {
-            rows.push_back(row);
-        }
-    }
-    return rows;
-}
-
-std::vector<transcribe_speaker_segment> sorted_rows(std::vector<transcribe_speaker_segment> rows) {
-    std::sort(rows.begin(), rows.end(), [](const auto & a, const auto & b) {
-        if (a.t0_ms != b.t0_ms) {
-            return a.t0_ms < b.t0_ms;
-        }
-        return a.speaker_id < b.speaker_id;
-    });
-    return rows;
-}
-
-bool same_rows(const std::vector<transcribe_speaker_segment> & a, const std::vector<transcribe_speaker_segment> & b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (a[i].t0_ms != b[i].t0_ms || a[i].t1_ms != b[i].t1_ms || a[i].speaker_id != b[i].speaker_id) {
-            return false;
-        }
-    }
-    return true;
-}
+// Shared row fixtures (tests/diar_rows.h): file plumbing, row read /
+// sort / compare, and the offline DIARIZE-role baseline; the peak-RSS
+// probe below stays local to this soak.
+using diar_rows::file_exists;
+using diar_rows::read_segments;
+using diar_rows::same_rows;
+using diar_rows::sorted_rows;
 
 int64_t peak_rss_bytes() {
 #if defined(_WIN32)
@@ -156,30 +124,11 @@ int main() {
     // Offline baseline at the same operating point, through the DIARIZE role.
     transcribe_run_params rp;
     transcribe_run_params_init(&rp);
-    transcribe_diarize_session * diar_sess = nullptr;
-    CHECK(transcribe_diarize_session_init(model, nullptr, &diar_sess) == TRANSCRIBE_OK);
-    transcribe_sortformer_diarize_ext run_ext;
-    transcribe_sortformer_diarize_ext_init(&run_ext);
-    run_ext.preset = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
-    transcribe_diarize_params dp;
-    transcribe_diarize_params_init(&dp);
-    dp.family                  = &run_ext.ext;
-    const auto t_offline_start = std::chrono::steady_clock::now();
-    CHECK(transcribe_diarize_run(diar_sess, pcm.data(), static_cast<int>(pcm.size()), &dp) == TRANSCRIBE_OK);
+    const auto                                    t_offline_start = std::chrono::steady_clock::now();
+    const std::vector<transcribe_speaker_segment> offline_rows    = diar_rows::sorted_rows(
+        diar_rows::offline_diarize_rows(model, pcm, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY));
     const double offline_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_offline_start).count();
-    std::vector<transcribe_speaker_segment> diar_rows;
-    {
-        const int n = transcribe_diarize_n_segments(diar_sess);
-        for (int i = 0; i < n; ++i) {
-            transcribe_speaker_segment row;
-            transcribe_speaker_segment_init(&row);
-            if (transcribe_diarize_get_segment(diar_sess, i, &row) == TRANSCRIBE_OK) {
-                diar_rows.push_back(row);
-            }
-        }
-    }
-    transcribe_diarize_session_free(diar_sess);
-    const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(diar_rows);
+    CHECK(!offline_rows.empty());
     std::printf("offline: %zu rows in %.1f s\n", offline_rows.size(), offline_s);
 
     // Push-audio stream, fixed-size feeds.

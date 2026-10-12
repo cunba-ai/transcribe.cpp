@@ -26,12 +26,10 @@
 // Gated by TRANSCRIBE_SORTFORMER_GGUF (same pattern as the other
 // real-model tests).
 
+#include "diar_rows.h"
 #include "transcribe.h"
-#include "transcribe/diarize.h"
 #include "transcribe/sortformer.h"
 #include "wav.h"
-
-#include <sys/stat.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -51,39 +49,14 @@ int g_failures = 0;
         }                                                                        \
     } while (0)
 
-bool file_exists(const std::string & path) {
-    struct stat st{};
-    return ::stat(path.c_str(), &st) == 0;
-}
-
-void set_env(const char * key, const char * value) {
-#if defined(_WIN32)
-    ::_putenv_s(key, value);
-#else
-    ::setenv(key, value, 1);
-#endif
-}
-
-void unset_env(const char * key) {
-#if defined(_WIN32)
-    ::_putenv_s(key, "");
-#else
-    ::unsetenv(key);
-#endif
-}
-
-std::vector<transcribe_speaker_segment> read_segments(const transcribe_session * session) {
-    std::vector<transcribe_speaker_segment> rows;
-    const int                               n = transcribe_n_speaker_segments(session);
-    for (int i = 0; i < n; ++i) {
-        transcribe_speaker_segment row;
-        transcribe_speaker_segment_init(&row);
-        if (transcribe_get_speaker_segment(session, i, &row) == TRANSCRIBE_OK) {
-            rows.push_back(row);
-        }
-    }
-    return rows;
-}
+// Shared row fixtures (tests/diar_rows.h): file/env plumbing, the
+// sorted/compare row helpers, and the offline DIARIZE-role baseline;
+// the tentative-row and debug helpers below stay local to this suite.
+using diar_rows::file_exists;
+using diar_rows::read_segments;
+using diar_rows::same_rows;
+using diar_rows::sorted_rows;
+using diar_rows::unset_env;
 
 std::vector<transcribe_speaker_segment> read_tentative(const transcribe_session * session) {
     std::vector<transcribe_speaker_segment> rows;
@@ -96,29 +69,6 @@ std::vector<transcribe_speaker_segment> read_tentative(const transcribe_session 
         }
     }
     return rows;
-}
-
-// Canonical order for comparisons: by start time, then speaker.
-std::vector<transcribe_speaker_segment> sorted_rows(std::vector<transcribe_speaker_segment> rows) {
-    std::sort(rows.begin(), rows.end(), [](const auto & a, const auto & b) {
-        if (a.t0_ms != b.t0_ms) {
-            return a.t0_ms < b.t0_ms;
-        }
-        return a.speaker_id < b.speaker_id;
-    });
-    return rows;
-}
-
-bool same_rows(const std::vector<transcribe_speaker_segment> & a, const std::vector<transcribe_speaker_segment> & b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (a[i].t0_ms != b[i].t0_ms || a[i].t1_ms != b[i].t1_ms || a[i].speaker_id != b[i].speaker_id) {
-            return false;
-        }
-    }
-    return true;
 }
 
 bool debug_enabled() {
@@ -280,28 +230,8 @@ int main() {
 
     // Baseline offline run through the DIARIZE role (VERY_HIGH_LATENCY,
     // the DER-validated point).
-    transcribe_diarize_session * diar_sess = nullptr;
-    CHECK(transcribe_diarize_session_init(model, nullptr, &diar_sess) == TRANSCRIBE_OK);
-    transcribe_sortformer_diarize_ext run_ext;
-    transcribe_sortformer_diarize_ext_init(&run_ext);
-    run_ext.preset = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
-    transcribe_diarize_params dp;
-    transcribe_diarize_params_init(&dp);
-    dp.family = &run_ext.ext;
-    CHECK(transcribe_diarize_run(diar_sess, pcm.data(), static_cast<int>(pcm.size()), &dp) == TRANSCRIBE_OK);
-    std::vector<transcribe_speaker_segment> diar_rows;
-    {
-        const int n = transcribe_diarize_n_segments(diar_sess);
-        for (int i = 0; i < n; ++i) {
-            transcribe_speaker_segment row;
-            transcribe_speaker_segment_init(&row);
-            if (transcribe_diarize_get_segment(diar_sess, i, &row) == TRANSCRIBE_OK) {
-                diar_rows.push_back(row);
-            }
-        }
-    }
-    transcribe_diarize_session_free(diar_sess);
-    const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(diar_rows);
+    const std::vector<transcribe_speaker_segment> offline_rows = diar_rows::sorted_rows(
+        diar_rows::offline_diarize_rows(model, pcm, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY));
     CHECK(!offline_rows.empty());
 
     // 4. Streaming vs offline parity (1 s feeds).
@@ -373,28 +303,9 @@ int main() {
     // 7. A different geometry streams and produces rows, and matches the
     // offline diarize run at the same operating point after finalize.
     {
-        transcribe_diarize_session * diar_lo = nullptr;
-        CHECK(transcribe_diarize_session_init(model, nullptr, &diar_lo) == TRANSCRIBE_OK);
-        transcribe_sortformer_diarize_ext run_lo;
-        transcribe_sortformer_diarize_ext_init(&run_lo);
-        run_lo.preset = TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY;
-        transcribe_diarize_params dp_lo;
-        transcribe_diarize_params_init(&dp_lo);
-        dp_lo.family = &run_lo.ext;
-        CHECK(transcribe_diarize_run(diar_lo, pcm.data(), static_cast<int>(pcm.size()), &dp_lo) == TRANSCRIBE_OK);
-        std::vector<transcribe_speaker_segment> lo_diar_rows;
-        {
-            const int n = transcribe_diarize_n_segments(diar_lo);
-            for (int i = 0; i < n; ++i) {
-                transcribe_speaker_segment row;
-                transcribe_speaker_segment_init(&row);
-                if (transcribe_diarize_get_segment(diar_lo, i, &row) == TRANSCRIBE_OK) {
-                    lo_diar_rows.push_back(row);
-                }
-            }
-        }
-        transcribe_diarize_session_free(diar_lo);
-        const std::vector<transcribe_speaker_segment> lo_offline = sorted_rows(lo_diar_rows);
+        const std::vector<transcribe_speaker_segment> lo_offline = diar_rows::sorted_rows(
+            diar_rows::offline_diarize_rows(model, pcm, TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY));
+        CHECK(!lo_offline.empty());
 
         bool                                          saw_lo_tentative = false;
         const std::vector<transcribe_speaker_segment> lo =

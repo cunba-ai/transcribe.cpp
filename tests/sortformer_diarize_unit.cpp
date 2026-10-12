@@ -1,6 +1,7 @@
 // sortformer_diarize_unit.cpp - Sortformer on the DIARIZE role, against a
 // real GGUF (TRANSCRIBE_SORTFORMER_GGUF; RC 77 skip when unset).
 
+#include "diar_rows.h"
 #include "transcribe.h"
 #include "transcribe/diarize.h"
 #include "transcribe/sortformer.h"
@@ -23,6 +24,13 @@ int g_failures = 0;
         }                                                                        \
     } while (0)
 
+// Shared row fixtures (tests/diar_rows.h): env hygiene for the preset
+// override and the raw diarize-row reader; the Row triple + golden
+// comparison below stay local to this suite.
+using diar_rows::read_diarize_rows;
+using diar_rows::set_env;
+using diar_rows::unset_env;
+
 struct Row {
     int64_t t0, t1;
     int32_t spk;
@@ -32,10 +40,7 @@ struct Row {
 
 std::vector<Row> diarize_rows(const transcribe_diarize_session * s) {
     std::vector<Row> rows;
-    for (int i = 0; i < transcribe_diarize_n_segments(s); ++i) {
-        transcribe_speaker_segment r;
-        transcribe_speaker_segment_init(&r);
-        transcribe_diarize_get_segment(s, i, &r);
+    for (const transcribe_speaker_segment & r : read_diarize_rows(s)) {
         rows.push_back({ r.t0_ms, r.t1_ms, r.speaker_id });
     }
     return rows;
@@ -47,22 +52,6 @@ transcribe_model * load_cpu(const char * path) {
     mp.backend               = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * model = nullptr;
     return transcribe_model_load_file(path, &mp, &model) == TRANSCRIBE_OK ? model : nullptr;
-}
-
-void set_env(const char * key, const char * value) {
-#if defined(_WIN32)
-    ::_putenv_s(key, value);
-#else
-    ::setenv(key, value, 1);
-#endif
-}
-
-void unset_env(const char * key) {
-#if defined(_WIN32)
-    ::_putenv_s(key, "");  // MSVC CRT: empty value removes the variable
-#else
-    ::unsetenv(key);
-#endif
 }
 
 std::vector<Row> diarize(transcribe_diarize_session * s,
