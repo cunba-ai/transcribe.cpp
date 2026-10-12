@@ -20,6 +20,10 @@ else()
 endif()
 add_library(transcribe ${_transcribe_lib_type}
     transcribe.cpp
+    transcribe-asr.cpp
+    transcribe-diarize.cpp
+    transcribe-langid.cpp
+    transcribe-vad.cpp
     transcribe-loader.cpp
     transcribe-arch.cpp
     transcribe-meta.cpp
@@ -38,12 +42,12 @@ add_library(transcribe ${_transcribe_lib_type}
     transcribe-weights-util.cpp
     transcribe-bin-loader.cpp
     transcribe-batch-util.cpp
-    transcribe-vad.cpp
     conformer/conformer.cpp
     sanm/sanm.cpp
     causal_lm/causal_lm.cpp
     granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
+    arch/parakeet/longform.cpp
     arch/parakeet/multitalker.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
@@ -72,8 +76,14 @@ add_library(transcribe ${_transcribe_lib_type}
     arch/moss/decoder.cpp
     arch/sortformer/model.cpp
     arch/sortformer/stream.cpp
-    arch/sortformer/capabilities.cpp
     arch/sortformer/weights.cpp
+    arch/ecapa_tdnn/graph.cpp
+    arch/ecapa_tdnn/model.cpp
+    arch/ecapa_tdnn/weights.cpp
+    arch/silero_vad/decoder.cpp
+    arch/silero_vad/encoder.cpp
+    arch/silero_vad/model.cpp
+    arch/silero_vad/weights.cpp
     arch/voxtral/model.cpp
     arch/voxtral/capabilities.cpp
     arch/voxtral/weights.cpp
@@ -151,18 +161,6 @@ add_library(transcribe ${_transcribe_lib_type}
     # suppression are set below.
     third_party/miniz/miniz.c
 )
-
-# Optional VAD glue (dynamic audiocpp.dll load at runtime). Gated because it
-# pulls in LoadLibrary/dlopen + the audiocpp symbol table; off by default the
-# library has zero audiocpp dependency. transcribe-vad.cpp (struct_size
-# negotiation + the pure plan() function) is always compiled so the run_params
-# field parses uniformly; only the audiocpp-backed impl is gated.
-if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
-    target_sources(transcribe PRIVATE
-        transcribe-vad-audiocpp.cpp
-        transcribe-vad-integrate.cpp)
-    target_compile_definitions(transcribe PUBLIC TRANSCRIBE_VAD_VIA_AUDIOCPP=1)
-endif()
 
 target_include_directories(transcribe
     PUBLIC

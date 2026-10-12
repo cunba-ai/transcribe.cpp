@@ -153,6 +153,24 @@ def case_language(case) -> str | None:
     return "en"
 
 
+def case_stages(case, default: list[str]) -> list[str]:
+    """Per-case dumper subcommands. Dict cases may set `stages` (e.g. a
+    `longform` path instead of whole-clip encoder/decode)."""
+    if isinstance(case, dict) and "stages" in case:
+        stages = case["stages"]
+        if not isinstance(stages, list) or not all(isinstance(s, str) for s in stages):
+            raise SystemExit(f"error: case stages must be a list of strings: {case!r}")
+        return list(stages)
+    return list(default)
+
+
+def manifest_env_dir(repo: Path, manifest: dict[str, Any], family: str) -> Path:
+    """Reference env: scripts/envs/<reference.env>, else scripts/envs/<family>.
+    A variant whose reference framework differs from the family's names its own."""
+    env = (manifest.get("reference") or {}).get("env") or family
+    return repo / "scripts" / "envs" / str(env)
+
+
 def case_transcript_compare(manifest: dict[str, Any], case) -> str:
     value = manifest.get("transcript_compare", "exact")
     if isinstance(case, dict) and "transcript_compare" in case:
@@ -309,6 +327,22 @@ def parse_cli_transcript(output: str) -> str | None:
     return None
 
 
+def parse_cli_language(output: str) -> dict[str, Any] | None:
+    """The LANGID CLI's `language: <code> index=<i> p=<p>` line."""
+    for line in output.splitlines():
+        if line.startswith("language: "):
+            parts = line[len("language: "):].split()
+            fields = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+            return {"code": parts[0], "label_index": int(fields["index"]), "p": float(fields["p"])}
+    return None
+
+
+def parse_cli_segments(output: str) -> list[dict[str, int]]:
+    """The VAD CLI's `segment: <i> start=<sample> end=<sample> ...` lines."""
+    return [{"start": int(m[1]), "end": int(m[2])}
+            for m in re.finditer(r"^\s*segment: \d+ start=(\d+) end=(\d+)", output, re.M)]
+
+
 def write_cpp_transcript(
     out_dir: Path,
     *,
@@ -347,7 +381,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         raise SystemExit("error: no model specified and none in manifest")
 
     dump_script = manifest_dump_script(repo, manifest)
-    env_dir = repo / "scripts" / "envs" / args.family
+    env_dir = manifest_env_dir(repo, manifest, args.family)
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
@@ -379,7 +413,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # family's dumper accepts --revision. The dumper itself ignores
         # --revision when --model resolves to a local directory.
         hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
-        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc"):
+        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc", "ecapa_tdnn"):
             common_args += ["--revision", str(hf_revision)]
 
         # Forward any manifest-declared dumper args verbatim. Used today
@@ -411,10 +445,16 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # (--preset) and the C++ side (TRANSCRIBE_SORTFORMER_STREAM_PRESET in
         # cmd_cpp); unset -> the checkpoint-shipped cfg (single chunk on the
         # short oracle, i.e. diar.probs == diar.preds_offline).
+        #
+        # ecapa_tdnn (language ID) is one forward pass: the `encoder`
+        # subcommand dumps the front end, encoder, classifier and
+        # prediction.json from a single classify_batch call.
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
+        elif args.family in ("ecapa_tdnn", "silero_vad"):
+            stages = ["encoder"]
         else:
-            stages = ["encoder", "decode"]
+            stages = case_stages(case, ["encoder", "decode"])
         sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
         for stage in stages:
             stage_args = list(common_args)
@@ -454,6 +494,9 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
 
         # Sortformer: keep the C++ streaming operating point in lockstep with
         # the reference `diarize --preset` (see cmd_ref) so the diar.probs
@@ -547,7 +590,23 @@ def cmd_cpp(args: argparse.Namespace) -> int:
                 f"error: cpp dump [{args.family}/{case_name}] failed "
                 f"with exit code {result.returncode}"
             )
+        if manifest.get("role") == "vad":
+            # A VAD model: its behavioural artifact is the speech segments,
+            # compared against the reference's segments.json.
+            segments = parse_cli_segments(result.stdout or "")
+            (out_dir / "segments.json").write_text(json.dumps({"segments": segments}, indent=2) + "\n")
+            print(f"  wrote {out_dir / 'segments.json'}", file=sys.stderr)
+            continue
         transcript = parse_cli_transcript(result.stdout or "")
+        if transcript is None and "speaker segments:" in (result.stdout or ""):
+            continue  # a diarizer has no transcript
+        prediction = parse_cli_language(result.stdout or "") if transcript is None else None
+        if prediction is not None:
+            # A language ID model: its behavioural artifact is the top-1
+            # label, compared against the reference's prediction.json.
+            (out_dir / "prediction.json").write_text(json.dumps(prediction, indent=2) + "\n")
+            print(f"  wrote {out_dir / 'prediction.json'}", file=sys.stderr)
+            continue
         if transcript is None:
             raise SystemExit(
                 f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
@@ -646,6 +705,37 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # emits speaker segments, not `text`). Its behavioral artifact is the
         # diar.probs tensor, gated above; the `diarize` stage's segment lines
         # are informational only, so skip the text-transcript comparison.
+        # Language ID: the gate is the top-1 label index, C++ vs reference.
+        # The case's expected_language is informational (the reference itself
+        # may miss it); it is reported, never gated.
+        ref_prediction = ref_dir / "prediction.json"
+        if ref_prediction.exists():
+            ref_pred = json.loads(ref_prediction.read_text())
+            cpp_prediction = cpp_dir / "prediction.json"
+            cpp_pred = (json.loads(cpp_prediction.read_text()) if cpp_prediction.exists()
+                        else {"code": "<missing prediction.json>"})
+            match = cpp_pred.get("label_index") == ref_pred["label_index"]
+            all_passed = all_passed and match
+            transcript_results.append({"case": case_name, "match": match, "mode": "label",
+                                       "reference": ref_pred["code"], "cpp": cpp_pred["code"]})
+            expected = case.get("expected_language") if isinstance(case, dict) else None
+            print(f"\n  Prediction: {'ok' if match else 'FAIL'} c++ {cpp_pred['code']!r}, "
+                  f"reference {ref_pred['code']!r}, expected {expected!r}")
+
+        # VAD: the gate is exact speech-segment parity (sample positions).
+        # A missing artifact on either side is a failure, not a skip.
+        if manifest.get("role") == "vad":
+            ref_segs, cpp_segs = ((json.loads(f.read_text())["segments"] if f.exists() else None)
+                                  for f in (ref_dir / "segments.json", cpp_dir / "segments.json"))
+            match = ref_segs is not None and cpp_segs == ref_segs
+            all_passed = all_passed and match
+            transcript_results.append({"case": case_name, "match": match, "mode": "segments",
+                                       "reference": ref_segs, "cpp": cpp_segs})
+            if match:
+                print(f"\n  Segments: ok ({len(ref_segs)} identical)")
+            else:
+                print(f"\n  Segments: FAIL\n    reference: {ref_segs}\n    c++:       {cpp_segs}")
+
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":
             transcript_compare = case_transcript_compare(manifest, case)
@@ -736,6 +826,9 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
         env.pop("TRANSCRIBE_MEL_FROM_REF", None)
 
         cmd = [

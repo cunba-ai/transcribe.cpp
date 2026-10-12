@@ -19,11 +19,11 @@ use transcribe_cpp::sys::{
     TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM, TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM,
 };
 use transcribe_cpp::{
-    ExtSlot, Model, ParakeetBufferedStreamOptions, ParakeetStreamOptions, RunExtension, RunOptions,
-    SortformerPreset, SortformerStreamOptions, SpeakerSegment, Stream, StreamExtension,
-    StreamOptions, VoxtralRealtimeStreamOptions,
+    DiarizeExtension, DiarizeOptions, ExtSlot, Model, ParakeetBufferedStreamOptions,
+    ParakeetStreamOptions, RunOptions, SortformerDiarizeOptions, SortformerPreset,
+    SortformerStreamOptions, SpeakerSegment, Stream, StreamExtension, StreamOptions,
+    VoxtralRealtimeStreamOptions,
 };
-
 /// Feed the first ~2 s of `pcm` in 100 ms chunks, finalize, and return
 /// `(is_final, full_text)` (owned copies). A short feed keeps the test fast and
 /// proves consumption without a full transcription.
@@ -155,7 +155,7 @@ fn sortformer_acceptance_discriminates() {
     };
     let model = Model::load(&model_path).unwrap();
     assert!(
-        model.capabilities().supports_streaming,
+        model.capabilities().unwrap().supports_streaming,
         "sortformer is natively streaming"
     );
     assert!(
@@ -176,7 +176,8 @@ fn sortformer_streams_with_extension() {
         eprintln!("skip sortformer_streams_with_extension: model/audio absent");
         return;
     };
-    let mut session = Model::load(&model_path).unwrap().session().unwrap();
+    let model = Model::load(&model_path).unwrap();
+    let mut session = model.session().unwrap();
 
     // 12 s mix, 480 ms chunks: the LOW_LATENCY geometry emits mid-stream, so
     // tentative turns must appear at some edge and all close at finalize.
@@ -210,24 +211,24 @@ fn sortformer_streams_with_extension() {
         assert!((1..=4).contains(&t.speaker_id));
     }
 
-    // The offline run at the SAME operating point must reach the same
-    // segmentation (frame-exact here: the incremental mel and window
+    // The offline DIARIZE-role run at the SAME operating point must reach the
+    // same segmentation (frame-exact here: the incremental mel and window
     // scheduling are bit-identical to the batch path on a given build).
-    let offline = session
+    let mut diar = model.diarize_session().expect("diarize session");
+    let offline = diar
         .run(
             &pcm,
-            &RunOptions {
-                family: Some(RunExtension::Sortformer(SortformerStreamOptions {
+            &DiarizeOptions {
+                family: Some(DiarizeExtension::Sortformer(SortformerDiarizeOptions {
                     preset: Some(SortformerPreset::LowLatency),
                 })),
-                ..RunOptions::default()
             },
         )
-        .expect("offline run at LOW_LATENCY");
+        .expect("offline diarize run at LOW_LATENCY");
     let key = |r: &SpeakerSegment| (r.t0_ms, r.t1_ms, r.speaker_id);
     let mut low_sorted = low.clone();
     low_sorted.sort_by_key(key);
-    let mut offline_sorted = offline.speaker_segments.clone();
+    let mut offline_sorted = offline.clone();
     offline_sorted.sort_by_key(key);
     // Compare the semantic fields only: `p` is NaN (not produced), and
     // NaN != NaN would fail a derived PartialEq.

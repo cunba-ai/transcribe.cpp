@@ -27,6 +27,7 @@
 // real-model tests).
 
 #include "transcribe.h"
+#include "transcribe/diarize.h"
 #include "transcribe/sortformer.h"
 #include "wav.h"
 
@@ -254,7 +255,8 @@ int main() {
                                             TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM));
     CHECK(
         !transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM));
-    CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM));
+    CHECK(
+        !transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_SORTFORMER_DIARIZE));
     CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, 0x4E524857u /* WHRN */));
 
     // 2. Init function stamps the header + default.
@@ -276,17 +278,48 @@ int main() {
     transcribe_stream_params sp;
     transcribe_stream_params_init(&sp);
 
-    // Baseline offline run (VERY_HIGH_LATENCY, the DER-validated point).
-    transcribe_sortformer_stream_ext run_ext;
-    transcribe_sortformer_stream_ext_init(&run_ext);
+    // Baseline offline run through the DIARIZE role (VERY_HIGH_LATENCY,
+    // the DER-validated point).
+    transcribe_diarize_session * diar_sess = nullptr;
+    CHECK(transcribe_diarize_session_init(model, nullptr, &diar_sess) == TRANSCRIBE_OK);
+    transcribe_sortformer_diarize_ext run_ext;
+    transcribe_sortformer_diarize_ext_init(&run_ext);
     run_ext.preset = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
-    rp.family      = &run_ext.ext;
-    CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_OK);
-    const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(read_segments(session));
+    transcribe_diarize_params dp;
+    transcribe_diarize_params_init(&dp);
+    dp.family = &run_ext.ext;
+    CHECK(transcribe_diarize_run(diar_sess, pcm.data(), static_cast<int>(pcm.size()), &dp) == TRANSCRIBE_OK);
+    std::vector<transcribe_speaker_segment> diar_rows;
+    {
+        const int n = transcribe_diarize_n_segments(diar_sess);
+        for (int i = 0; i < n; ++i) {
+            transcribe_speaker_segment row;
+            transcribe_speaker_segment_init(&row);
+            if (transcribe_diarize_get_segment(diar_sess, i, &row) == TRANSCRIBE_OK) {
+                diar_rows.push_back(row);
+            }
+        }
+    }
+    transcribe_diarize_session_free(diar_sess);
+    const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(diar_rows);
     CHECK(!offline_rows.empty());
-    rp.family = nullptr;
 
-    // 3. Pre-clear rejection preserves the previous result and state.
+    // 4. Streaming vs offline parity (1 s feeds).
+    bool                                    saw_tentative = false;
+    std::vector<transcribe_speaker_segment> streamed;
+    {
+        const size_t one_s = 16000;
+        streamed =
+            sorted_rows(run_stream(session, pcm, one_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
+        if (!same_rows(streamed, offline_rows)) {
+            dump_rows("offline", offline_rows);
+            dump_rows("streamed", streamed);
+        }
+        CHECK(same_rows(streamed, offline_rows));
+    }
+
+    // 3. Pre-clear rejection preserves the previous result and state (the
+    // previous result is the section-4 stream's committed rows).
     {
         transcribe_sortformer_push_stream_ext bad;
         transcribe_sortformer_push_stream_ext_init(&bad);
@@ -294,7 +327,7 @@ int main() {
         sp.family    = &bad.ext;
         CHECK(transcribe_stream_begin(session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
         CHECK(transcribe_stream_get_state(session) != TRANSCRIBE_STREAM_ACTIVE);
-        CHECK(same_rows(sorted_rows(read_segments(session)), offline_rows));  // snapshot intact
+        CHECK(same_rows(sorted_rows(read_segments(session)), streamed));  // snapshot intact
 
         transcribe_sortformer_push_stream_ext oor;
         transcribe_sortformer_push_stream_ext_init(&oor);
@@ -302,21 +335,8 @@ int main() {
         sp.family  = &oor.ext;
         CHECK(transcribe_stream_begin(session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
         CHECK(transcribe_stream_get_state(session) != TRANSCRIBE_STREAM_ACTIVE);
-        CHECK(same_rows(sorted_rows(read_segments(session)), offline_rows));
+        CHECK(same_rows(sorted_rows(read_segments(session)), streamed));
         sp.family = nullptr;
-    }
-
-    // 4. Streaming vs offline parity (1 s feeds).
-    bool saw_tentative = false;
-    {
-        const size_t                                  one_s = 16000;
-        const std::vector<transcribe_speaker_segment> streamed =
-            sorted_rows(run_stream(session, pcm, one_s, TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY, saw_tentative));
-        if (!same_rows(streamed, offline_rows)) {
-            dump_rows("offline", offline_rows);
-            dump_rows("streamed", streamed);
-        }
-        CHECK(same_rows(streamed, offline_rows));
     }
 
     // 5. Chunk-size invariance (0.5 s and 10 s feeds).
@@ -351,15 +371,30 @@ int main() {
     }
 
     // 7. A different geometry streams and produces rows, and matches the
-    // offline run at the same operating point after finalize.
+    // offline diarize run at the same operating point after finalize.
     {
-        transcribe_sortformer_stream_ext run_lo;
-        transcribe_sortformer_stream_ext_init(&run_lo);
+        transcribe_diarize_session * diar_lo = nullptr;
+        CHECK(transcribe_diarize_session_init(model, nullptr, &diar_lo) == TRANSCRIBE_OK);
+        transcribe_sortformer_diarize_ext run_lo;
+        transcribe_sortformer_diarize_ext_init(&run_lo);
         run_lo.preset = TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY;
-        rp.family     = &run_lo.ext;
-        CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_OK);
-        const std::vector<transcribe_speaker_segment> lo_offline = sorted_rows(read_segments(session));
-        rp.family                                                = nullptr;
+        transcribe_diarize_params dp_lo;
+        transcribe_diarize_params_init(&dp_lo);
+        dp_lo.family = &run_lo.ext;
+        CHECK(transcribe_diarize_run(diar_lo, pcm.data(), static_cast<int>(pcm.size()), &dp_lo) == TRANSCRIBE_OK);
+        std::vector<transcribe_speaker_segment> lo_diar_rows;
+        {
+            const int n = transcribe_diarize_n_segments(diar_lo);
+            for (int i = 0; i < n; ++i) {
+                transcribe_speaker_segment row;
+                transcribe_speaker_segment_init(&row);
+                if (transcribe_diarize_get_segment(diar_lo, i, &row) == TRANSCRIBE_OK) {
+                    lo_diar_rows.push_back(row);
+                }
+            }
+        }
+        transcribe_diarize_session_free(diar_lo);
+        const std::vector<transcribe_speaker_segment> lo_offline = sorted_rows(lo_diar_rows);
 
         bool                                          saw_lo_tentative = false;
         const std::vector<transcribe_speaker_segment> lo =

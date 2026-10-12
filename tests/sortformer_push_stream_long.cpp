@@ -17,6 +17,7 @@
 // optionally overrides the feed size (default 1000 ms).
 
 #include "transcribe.h"
+#include "transcribe/diarize.h"
 #include "transcribe/sortformer.h"
 #include "wav.h"
 
@@ -152,18 +153,33 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Offline baseline at the same operating point.
+    // Offline baseline at the same operating point, through the DIARIZE role.
     transcribe_run_params rp;
     transcribe_run_params_init(&rp);
-    transcribe_sortformer_stream_ext run_ext;
-    transcribe_sortformer_stream_ext_init(&run_ext);
-    run_ext.preset             = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
-    rp.family                  = &run_ext.ext;
+    transcribe_diarize_session * diar_sess = nullptr;
+    CHECK(transcribe_diarize_session_init(model, nullptr, &diar_sess) == TRANSCRIBE_OK);
+    transcribe_sortformer_diarize_ext run_ext;
+    transcribe_sortformer_diarize_ext_init(&run_ext);
+    run_ext.preset = TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY;
+    transcribe_diarize_params dp;
+    transcribe_diarize_params_init(&dp);
+    dp.family                  = &run_ext.ext;
     const auto t_offline_start = std::chrono::steady_clock::now();
-    CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_OK);
+    CHECK(transcribe_diarize_run(diar_sess, pcm.data(), static_cast<int>(pcm.size()), &dp) == TRANSCRIBE_OK);
     const double offline_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_offline_start).count();
-    rp.family              = nullptr;
-    const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(read_segments(session));
+    std::vector<transcribe_speaker_segment> diar_rows;
+    {
+        const int n = transcribe_diarize_n_segments(diar_sess);
+        for (int i = 0; i < n; ++i) {
+            transcribe_speaker_segment row;
+            transcribe_speaker_segment_init(&row);
+            if (transcribe_diarize_get_segment(diar_sess, i, &row) == TRANSCRIBE_OK) {
+                diar_rows.push_back(row);
+            }
+        }
+    }
+    transcribe_diarize_session_free(diar_sess);
+    const std::vector<transcribe_speaker_segment> offline_rows = sorted_rows(diar_rows);
     std::printf("offline: %zu rows in %.1f s\n", offline_rows.size(), offline_s);
 
     // Push-audio stream, fixed-size feeds.

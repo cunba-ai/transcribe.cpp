@@ -2,17 +2,19 @@
 //!
 //! A `Model` is `Arc`-backed and `Send + Sync`: cloning it is cheap and hands
 //! out another handle to the same native model. The native model is freed when
-//! the last handle AND every [`Session`](crate::Session) derived from it have
-//! been dropped — Rust ownership gives the C "model must outlive its sessions"
-//! contract (and close-ordering safety) for free, in any drop order.
+//! the last handle AND every [`Session`](crate::Session) /
+//! [`DiarizeSession`](crate::DiarizeSession) derived from it have been dropped
+//! — Rust ownership gives the C "model must outlive its sessions" contract (and
+//! close-ordering safety) for free, in any drop order.
 //!
 //! The `Arc` also carries the per-model compute lock that enforces the C
 //! library's 0.x concurrency limitation: at most one `run` / `run_batch` /
-//! active stream may be in flight across ALL sessions of a model. One-shot
-//! runs/batches queue on the lock (serialized); an *active stream* spans many
-//! native calls (`begin`→`feed`*→`finalize`), so the lock also carries a flag
-//! marking a stream in flight — any run/batch/stream that would overlap it is
-//! refused with [`Error::Busy`](crate::Error) rather than allowed to race.
+//! diarize run / active stream may be in flight across ALL sessions of a model.
+//! One-shot runs/batches queue on the lock (serialized); an *active stream*
+//! spans many native calls (`begin`→`feed`*→`finalize`), so the lock also
+//! carries a flag marking a stream in flight — any run/batch/stream that would
+//! overlap it is refused with [`Error::Busy`](crate::Error) rather than allowed
+//! to race.
 
 use std::ffi::CString;
 use std::path::Path;
@@ -21,10 +23,13 @@ use std::sync::{Arc, Mutex};
 use transcribe_cpp_sys as sys;
 
 use crate::backend::Device;
-use crate::error::{check, Result};
+use crate::diarize::{DiarizeInfo, DiarizeSession, DiarizeSessionOptions};
+use crate::error::{check, Error, Result};
+use crate::langid::{LangIdInfo, LangIdSession, LangIdSessionOptions};
 use crate::result::owned_str;
 use crate::session::Session;
-use crate::types::{Backend, ExtSlot, Feature, TimestampKind};
+use crate::types::{Backend, ExtSlot, Feature, Roles, TimestampKind};
+use crate::vad::{VadInfo, VadSession, VadSessionOptions};
 use crate::version;
 
 /// Options for loading a model.
@@ -49,6 +54,7 @@ impl Default for ModelOptions {
 
 /// Immutable, model-level capabilities read from GGUF metadata.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Capabilities {
     pub native_sample_rate: i32,
     /// Supported language codes (empty if the model is language-agnostic).
@@ -72,8 +78,28 @@ pub(crate) struct ModelInner {
     /// is `true` while a stream is ACTIVE (from `begin` until the earliest of
     /// `finalize` / `reset` / the `Stream` being dropped); a held lock plus a
     /// `true` flag is how `run`/`run_batch`/`stream` detect and refuse an
-    /// overlapping compute. See the module docs.
+    /// overlapping compute. Only taken through [`ModelInner::with_compute`].
+    /// See the module docs.
     pub(crate) compute_lock: Mutex<bool>,
+}
+
+impl ModelInner {
+    /// Run `f` under the model's compute lock; every native compute call goes
+    /// through here. With `Some(msg)`, returns `Error::Busy(msg)` instead if a
+    /// stream holds the lease. `f` gets the lease flag to take or release it.
+    pub(crate) fn with_compute<R>(
+        &self,
+        refuse_if_streaming: Option<&str>,
+        f: impl FnOnce(&mut bool) -> R,
+    ) -> Result<R> {
+        let mut lease = self.compute_lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(msg) = refuse_if_streaming {
+            if *lease {
+                return Err(Error::Busy(msg.into()));
+            }
+        }
+        Ok(f(&mut lease))
+    }
 }
 
 // SAFETY: the native model is documented thread-safe for query + session
@@ -106,12 +132,14 @@ impl std::fmt::Debug for Model {
 }
 
 impl Model {
-    /// Load a GGUF model from disk with default options.
+    /// Load a model from disk with default options: a GGUF, or a supported
+    /// whisper.cpp `.bin` (Whisper, or Silero VAD v5.1.2 / v6.2.0). The format
+    /// is detected from the file header, not the extension.
     pub fn load(path: impl AsRef<Path>) -> Result<Model> {
         Model::load_with(path, &ModelOptions::default())
     }
 
-    /// Load a GGUF model from disk with explicit options.
+    /// Load a model from disk with explicit options (formats as for [`Model::load`]).
     pub fn load_with(path: impl AsRef<Path>, options: &ModelOptions) -> Result<Model> {
         // Pre-1.0 base-version lock against the loaded library (once).
         version::ensure_compatible()?;
@@ -150,13 +178,122 @@ impl Model {
         Session::new(self, options)
     }
 
-    /// The model's immutable capabilities.
-    pub fn capabilities(&self) -> Capabilities {
+    /// Open a diarization session with default options. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Diarize`](crate::Role).
+    pub fn diarize_session(&self) -> Result<DiarizeSession> {
+        self.diarize_session_with(&DiarizeSessionOptions::default())
+    }
+
+    /// Open a diarization session with explicit options.
+    pub fn diarize_session_with(&self, options: &DiarizeSessionOptions) -> Result<DiarizeSession> {
+        DiarizeSession::new(self, options)
+    }
+
+    /// Static facts about a diarization model. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Diarize`](crate::Role).
+    pub fn diarize_info(&self) -> Result<DiarizeInfo> {
+        let mut raw: sys::transcribe_diarize_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_diarize_info_init(&mut raw) };
+        check(
+            unsafe { sys::transcribe_diarize_get_info(self.inner.ptr, &mut raw) },
+            "diarize info",
+        )?;
+        Ok(DiarizeInfo {
+            sample_rate: raw.sample_rate,
+            max_speakers: raw.max_speakers,
+        })
+    }
+
+    /// Open a language ID session with default options. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::LangId`](crate::Role).
+    pub fn langid_session(&self) -> Result<LangIdSession> {
+        self.langid_session_with(&LangIdSessionOptions::default())
+    }
+
+    /// Open a language ID session with explicit options.
+    pub fn langid_session_with(&self, options: &LangIdSessionOptions) -> Result<LangIdSession> {
+        LangIdSession::new(self, options)
+    }
+
+    /// Static facts about a language ID model. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::LangId`](crate::Role).
+    pub fn langid_info(&self) -> Result<LangIdInfo> {
+        let mut raw: sys::transcribe_langid_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_langid_info_init(&mut raw) };
+        check(
+            unsafe { sys::transcribe_langid_get_info(self.inner.ptr, &mut raw) },
+            "langid info",
+        )?;
+        Ok(LangIdInfo {
+            sample_rate: raw.sample_rate,
+            n_labels: raw.n_labels,
+            min_audio_ms: raw.min_audio_ms,
+            max_audio_ms: raw.max_audio_ms,
+        })
+    }
+
+    /// `(code, name)` per label index. Errors with [`Error::UnsupportedRole`]
+    /// unless the model serves [`Role::LangId`](crate::Role).
+    pub fn langid_labels(&self) -> Result<Vec<(String, String)>> {
+        let n = self.langid_info()?.n_labels;
+        Ok((0..n)
+            .map(|i| unsafe {
+                (
+                    owned_str(sys::transcribe_langid_label_code(self.inner.ptr, i)),
+                    owned_str(sys::transcribe_langid_label_name(self.inner.ptr, i)),
+                )
+            })
+            .collect())
+    }
+
+    /// Label index of a code or alias (`"he"` and `"iw"` name the same label);
+    /// `None` when unknown or the model does not serve the LANGID role.
+    pub fn langid_label_index(&self, code: &str) -> Option<i32> {
+        let c = CString::new(code).ok()?;
+        let i = unsafe { sys::transcribe_langid_label_index(self.inner.ptr, c.as_ptr()) };
+        (i >= 0).then_some(i)
+    }
+
+    /// Open a VAD session with default options. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Vad`](crate::Role).
+    pub fn vad_session(&self) -> Result<VadSession> {
+        self.vad_session_with(&VadSessionOptions::default())
+    }
+
+    /// Open a VAD session with explicit options.
+    pub fn vad_session_with(&self, options: &VadSessionOptions) -> Result<VadSession> {
+        VadSession::new(self, options)
+    }
+
+    /// Static facts about a VAD model. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Vad`](crate::Role).
+    pub fn vad_info(&self) -> Result<VadInfo> {
+        let mut raw: sys::transcribe_vad_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_vad_info_init(&mut raw) };
+        check(
+            unsafe { sys::transcribe_vad_get_info(self.inner.ptr, &mut raw) },
+            "vad info",
+        )?;
+        Ok(VadInfo {
+            sample_rate: raw.sample_rate,
+            frame_samples: raw.frame_samples,
+        })
+    }
+
+    /// The roles (kinds of work) this model serves.
+    pub fn roles(&self) -> Roles {
+        Roles(unsafe { sys::transcribe_model_roles(self.inner.ptr) })
+    }
+
+    /// The model's immutable ASR capabilities. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Asr`](crate::Role).
+    pub fn capabilities(&self) -> Result<Capabilities> {
         let mut caps: sys::transcribe_capabilities = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_capabilities_init(&mut caps) };
-        // A NULL/struct-size fault cannot happen here (we own a valid model
-        // and an init'd struct), so a non-OK status leaves zeroed defaults.
-        let _ = unsafe { sys::transcribe_model_get_capabilities(self.inner.ptr, &mut caps) };
+        check(
+            unsafe { sys::transcribe_model_get_capabilities(self.inner.ptr, &mut caps) },
+            "capabilities",
+        )?;
 
         let mut languages = Vec::new();
         if !caps.languages.is_null() && caps.n_languages > 0 {
@@ -179,7 +316,7 @@ impl Model {
             }
         }
 
-        Capabilities {
+        Ok(Capabilities {
             native_sample_rate: caps.native_sample_rate,
             languages,
             translate_target_languages,
@@ -189,7 +326,7 @@ impl Model {
             supports_streaming: caps.supports_streaming,
             supports_spec_decode: caps.supports_spec_decode,
             max_audio_ms: caps.max_audio_ms,
-        }
+        })
     }
 
     /// Probe a yes/no feature.
@@ -289,6 +426,11 @@ fn check_model_load(status: sys::transcribe_status, context: &str) -> Result<()>
 
 /// Options for creating a session.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct SessionOptions {
     /// CPU threads for ops that run on CPU; 0 = library default.
     pub n_threads: i32,
@@ -310,6 +452,7 @@ impl Default for SessionOptions {
 
 /// Per-session effective limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SessionLimits {
     /// Decoder context cap in force for this session (0 = unbounded family).
     pub effective_n_ctx: i32,

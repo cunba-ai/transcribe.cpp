@@ -1,24 +1,20 @@
 /*
  * include/transcribe/sortformer.h - Sortformer-family public extension.
  *
- * Includes transcribe.h; safe to include in C or C++ TUs. Holds the
- * streaming-operating-point run extension (RUN slot), the push-audio
- * stream extension (STREAM slot), and their init functions plus the
- * push-stream tentative-turn accessors.
+ * Includes transcribe.h; safe to include in C or C++ TUs. Sortformer
+ * (diar_streaming_sortformer_4spk-v2.1) serves the DIARIZE role
+ * (include/transcribe/diarize.h). The diarize extension picks the streaming
+ * operating point for transcribe_diarize_run; probe with
+ * transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_DIARIZE_RUN,
+ * TRANSCRIBE_EXT_KIND_SORTFORMER_DIARIZE).
  *
- * Sortformer (diar_streaming_sortformer_4spk-v2.1) is a diarization-only model: a run
- * produces no text; the product is the who-spoke-when rows read back via
- * transcribe_n_speaker_segments / transcribe_get_speaker_segment
- * (TRANSCRIBE_FEATURE_DIARIZATION). The compute core is streaming
- * (AOSC speaker cache + FIFO); the batch transcribe_run over a whole
- * recording is exposed through the RUN-slot operating-point extension,
- * and the push-audio live session through the STREAM-slot extension
- * (transcribe_stream_begin / _feed / _finalize). Both take the same
+ * The push-audio stream extension (TRANSCRIBE_EXT_SLOT_STREAM) exposes the
+ * same streaming compute core as a live transcribe_stream_begin / _feed /
+ * _finalize session on the ASR-side session type; probe with
+ * transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
+ * TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM) before pointing
+ * transcribe_stream_params::family at it. Both extensions take the same
  * preset enum; the two kinds are slot-exclusive.
- *
- * Probe via transcribe_model_accepts_ext_kind(model, slot, kind)
- * before pointing transcribe_run_params::family (RUN slot) or
- * transcribe_stream_params::family (STREAM slot) at the struct.
  *
  * FourCC kinds are reserved in docs/extension-kinds.md.
  */
@@ -31,9 +27,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* 'SFST' little-endian = 0x54534653 */
-#define TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM 0x54534653u
 
 /* 'SFPS' little-endian = 0x53504653 */
 #define TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM 0x53504653u
@@ -60,8 +53,8 @@ extern "C" {
  *                       (many small windows); see the family doc for
  *                       measured throughput.
  *
- * Values outside the enum range are rejected by transcribe_run with
- * TRANSCRIBE_ERR_INVALID_ARG before the previous result is cleared.
+ * Values outside the enum range are rejected by transcribe_diarize_run
+ * with TRANSCRIBE_ERR_INVALID_ARG before the previous result is cleared.
  */
 typedef enum {
     TRANSCRIBE_SORTFORMER_PRESET_DEFAULT           = 0,
@@ -70,18 +63,23 @@ typedef enum {
     TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY       = 3,
 } transcribe_sortformer_preset;
 
-struct transcribe_sortformer_stream_ext {
+/* 'SFDR' little-endian = 0x52444653 (DIARIZE_RUN slot) */
+#define TRANSCRIBE_EXT_KIND_SORTFORMER_DIARIZE 0x52444653u
+
+/* transcribe_diarize_params::family: the operating point for
+ * transcribe_diarize_run. */
+struct transcribe_sortformer_diarize_ext {
     struct transcribe_ext        ext;
     transcribe_sortformer_preset preset;
 };
 
-/* Fills ext.size/kind and preset = DEFAULT (GGUF-shipped cfg). */
-TRANSCRIBE_API void transcribe_sortformer_stream_ext_init(struct transcribe_sortformer_stream_ext * ext);
+/* Fills ext.size/kind and preset = DEFAULT. */
+TRANSCRIBE_API void transcribe_sortformer_diarize_ext_init(struct transcribe_sortformer_diarize_ext * ext);
 
 /*
  * Push-audio stream extension (TRANSCRIBE_EXT_SLOT_STREAM; point
  * transcribe_stream_params::family at it). Carries the same operating-
- * point preset as the RUN-slot extension; DEFAULT keeps the GGUF-shipped
+ * point preset as the diarize extension; DEFAULT keeps the GGUF-shipped
  * chunk geometry. The extension is copied out before
  * transcribe_stream_begin returns (caller-owned storage).
  *
