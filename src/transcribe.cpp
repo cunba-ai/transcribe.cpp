@@ -21,6 +21,7 @@
 #include "arch/whisper/bin_load.h"
 #include "ggml-backend.h"
 #include "ggml.h"  // ggml_log_set: route ggml diagnostics into our sink
+#include "gguf.h"  // gguf_init_from_buffer: embedded-VAD GGUF parse
 #include "transcribe-abi.h"
 #include "transcribe-api-guard.h"
 #include "transcribe-arch.h"
@@ -34,6 +35,7 @@
 #include "transcribe-prompting.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe-vad-embedded.h"
 #include "transcribe/diarize.h"
 #include "transcribe/langid.h"
 #include "transcribe/vad.h"
@@ -1055,19 +1057,16 @@ static bool transcribe_backend_available_impl(int raw) {
 
 // Lifecycle
 
-static transcribe_status transcribe_model_load_file_impl(const char *                                path,
-                                                         const struct transcribe_model_load_params * params,
-                                                         struct transcribe_model **                  out_model) {
-    // Set up ggml's timer before any family's load-timing ggml_time_us() runs
-    // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init).
-    ensure_ggml_time_init();
+// Shared prologue of the model-load entry points: NULL out-arg check,
+// *out_model = NULL, "NULL params = all defaults" resolution, struct-size
+// gate, and the raw backend-enum boundary check that makes every
+// downstream `params->backend` read defined (see enum_field_raw).
+static transcribe_status model_load_prologue(const struct transcribe_model_load_params * params,
+                                             struct transcribe_model **                  out_model) {
     if (out_model == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     *out_model = nullptr;
-    if (path == nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
     // NULL params means "all defaults". This is the version-proof
     // spelling of defaults — it carries no struct_size, so it always
     // matches the running library. A zeroed struct ({0}) is a different
@@ -1099,9 +1098,61 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
         case TRANSCRIBE_BACKEND_ROCM:
             break;
         default:
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: invalid backend request %d",
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load: invalid backend request %d",
                                 enum_field_raw(&params->backend));
             return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    return TRANSCRIBE_OK;
+}
+
+// Shared tail of the model-load entry points: per-family dispatch from an
+// already-identified Loader, plus the central string-metadata copy. The
+// caller keeps ownership of the Loader (it frees the gguf_context on
+// unwind unless the handler released it).
+static transcribe_status load_from_loader(transcribe::Loader &                        loader,
+                                          const struct transcribe_model_load_params * params,
+                                          struct transcribe_model **                  out_model) {
+    // Per-family dispatch. The architecture string came from the GGUF KV so
+    // the loader guarantees it is non-null and NUL-terminated.
+    const transcribe::Arch * arch = transcribe::find_arch(loader.arch().c_str());
+    if (arch == nullptr) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_ARCH;
+    }
+
+    // A registered family with no load entry point yet is treated as
+    // not-implemented at the central dispatch level so a half-wired
+    // handler does not crash.
+    if (arch->load == nullptr) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    // Hand off. The handler may take ownership of the gguf_context via
+    // loader.release_gguf(); if it doesn't, the Loader destructor frees
+    // it normally on stack unwinding.
+    const transcribe_status st = arch->load(loader, params, out_model);
+
+    // Copy the string-metadata map onto the model once, centrally. The
+    // loader read it during open() and outlives arch->load(), so we set it
+    // here instead of in every per-family handler. `variant` is owned by the
+    // family (it may default it when stt.variant was absent) and stays on its
+    // own accessor; this map is the generic general.* / display surface.
+    if (st == TRANSCRIBE_OK && *out_model != nullptr) {
+        (*out_model)->meta = loader.meta();
+    }
+    return st;
+}
+
+static transcribe_status transcribe_model_load_file_impl(const char *                                path,
+                                                         const struct transcribe_model_load_params * params,
+                                                         struct transcribe_model **                  out_model) {
+    // Set up ggml's timer before any family's load-timing ggml_time_us() runs
+    // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init).
+    ensure_ggml_time_init();
+    if (const auto st = model_load_prologue(params, out_model); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (path == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     // Format sniff by reading the first four bytes (not the file extension,
@@ -1150,35 +1201,69 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
         return st;
     }
 
-    // Per-family dispatch. The architecture string came from the GGUF KV so
-    // the loader guarantees it is non-null and NUL-terminated.
-    const transcribe::Arch * arch = transcribe::find_arch(loader.arch().c_str());
-    if (arch == nullptr) {
-        return TRANSCRIBE_ERR_UNSUPPORTED_ARCH;
-    }
-
-    // A registered family with no load entry point yet is treated as
-    // not-implemented at the central dispatch level so a half-wired
-    // handler does not crash.
-    if (arch->load == nullptr) {
-        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
-    }
-
-    // Hand off. The handler may take ownership of the gguf_context via
-    // loader.release_gguf(); if it doesn't, the Loader destructor frees
-    // it normally on stack unwinding.
-    const transcribe_status st = arch->load(loader, params, out_model);
-
-    // Copy the string-metadata map onto the model once, centrally. The
-    // loader read it during open() and outlives arch->load(), so we set it
-    // here instead of in every per-family handler. `variant` is owned by the
-    // family (it may default it when stt.variant was absent) and stays on its
-    // own accessor; this map is the generic general.* / display surface.
-    if (st == TRANSCRIBE_OK && *out_model != nullptr) {
-        (*out_model)->meta = loader.meta();
-    }
-    return st;
+    return load_from_loader(loader, params, out_model);
 }
+
+#ifdef TRANSCRIBE_EMBED_VAD_MODEL
+static transcribe_status transcribe_model_load_embedded_vad_impl(const struct transcribe_model_load_params * params,
+                                                                 struct transcribe_model ** out_model) {
+    ensure_ggml_time_init();
+    if (const auto st = model_load_prologue(params, out_model); st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    // Header-only GGUF parse of the embedded asset. The array is static
+    // storage (generated source compiled into this library), so the buffer
+    // trivially outlives the Loader and every tensor-data copy made from
+    // it during load.
+    gguf_init_params init_params{};
+    init_params.no_alloc = true;
+    init_params.ctx      = nullptr;
+    gguf_context * gguf =
+        gguf_init_from_buffer(transcribe::kEmbeddedVadGguf, transcribe::kEmbeddedVadGgufSize, init_params);
+    if (gguf == nullptr) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                            "transcribe_model_load_embedded_vad: embedded GGUF failed to parse");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // adopt() takes ownership of the context (frees it on every failure
+    // and on Loader unwind unless the handler releases it), and records
+    // the backing buffer so the silero_vad loader streams tensor data
+    // from memory instead of a path.
+    transcribe::Loader loader;
+    if (const transcribe_status st = loader.adopt(gguf, transcribe::kEmbeddedVadGguf, transcribe::kEmbeddedVadGgufSize);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    // The embedded asset is the Silero VAD model by construction. Anything
+    // else means the generated source and this code drifted apart — fail
+    // loudly rather than dispatching a different family off an in-memory
+    // buffer its own loader may not support.
+    if (loader.arch() != "silero_vad") {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                            "transcribe_model_load_embedded_vad: embedded GGUF claims arch \"%s\", expected "
+                            "\"silero_vad\"",
+                            loader.arch().c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    return load_from_loader(loader, params, out_model);
+}
+#else
+static transcribe_status transcribe_model_load_embedded_vad_impl(const struct transcribe_model_load_params * params,
+                                                                 struct transcribe_model ** out_model) {
+    // Built with TRANSCRIBE_EMBED_VAD_MODEL=OFF: the entry point stays
+    // exported (stable symbol set) but has no bytes to serve.
+    if (out_model == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    *out_model = nullptr;
+    (void) params;
+    return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+}
+#endif
 
 static void transcribe_model_free_impl(struct transcribe_model * model) {
     // Polymorphic delete: the base has a virtual destructor (anchored
@@ -1295,6 +1380,20 @@ extern "C" transcribe_status transcribe_model_load_file(const char *            
                                                         struct transcribe_model **                  out_model) {
     const transcribe_status st = api_guard_status("transcribe_model_load_file", [&] {
         const transcribe_status lst = transcribe_model_load_file_impl(path, params, out_model);
+        return lst == TRANSCRIBE_OK && *out_model != nullptr ? transcribe::resolve_roles(*out_model) : lst;
+    });
+    // Boundary-owned postcondition: failure => *out_model == NULL.
+    if (st != TRANSCRIBE_OK && out_model != nullptr && *out_model != nullptr) {
+        transcribe_model_free(*out_model);
+        *out_model = nullptr;
+    }
+    return st;
+}
+
+extern "C" transcribe_status transcribe_model_load_embedded_vad(const struct transcribe_model_load_params * params,
+                                                                struct transcribe_model **                  out_model) {
+    const transcribe_status st = api_guard_status("transcribe_model_load_embedded_vad", [&] {
+        const transcribe_status lst = transcribe_model_load_embedded_vad_impl(params, out_model);
         return lst == TRANSCRIBE_OK && *out_model != nullptr ? transcribe::resolve_roles(*out_model) : lst;
     });
     // Boundary-owned postcondition: failure => *out_model == NULL.

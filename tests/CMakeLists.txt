@@ -433,6 +433,28 @@ add_test(NAME transcribe_vad_progress_unit
     COMMAND transcribe_vad_progress_unit)
 
 # -----------------------------------------------------------------------------
+# Embedded Silero VAD asset: transcribe_model_load_embedded_vad end to end,
+# with NO model file on disk (the bytes live in the library)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_vad_embedded_unit
+    vad_embedded_unit.cpp)
+
+target_link_libraries(transcribe_vad_embedded_unit PRIVATE transcribe)
+
+# 1 when the library embeds the asset; 0 makes the binary pin the
+# NOT_IMPLEMENTED contract and report skip (77).
+target_compile_definitions(transcribe_vad_embedded_unit PRIVATE
+    TRANSCRIBE_TEST_EMBED_VAD=$<BOOL:${TRANSCRIBE_EMBED_VAD_MODEL_ON}>)
+
+transcribe_apply_warnings(transcribe_vad_embedded_unit)
+
+add_test(NAME transcribe_vad_embedded_unit
+    COMMAND transcribe_vad_embedded_unit)
+set_tests_properties(transcribe_vad_embedded_unit PROPERTIES
+    SKIP_RETURN_CODE 77)
+
+# -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
 # -----------------------------------------------------------------------------
 #

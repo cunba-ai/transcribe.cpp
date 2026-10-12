@@ -305,6 +305,12 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/generated/transcribe-build-info.h"
     @ONLY)
 
+# Embedded Silero VAD asset (TRANSCRIBE_EMBED_VAD_MODEL): resolves the VAD
+# GGUF (explicit file or configure-time download) and generates the byte-
+# array source consumed by the transcribe target. Sets TRANSCRIBE_VAD_EMBEDDED_CPP
+# and TRANSCRIBE_EMBED_VAD_MODEL_ON for src/CMakeLists.txt; no-ops when OFF.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TranscribeEmbedVad.cmake")
+
 message(STATUS "transcribe version: ${TRANSCRIBE_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT}, branch ${TRANSCRIBE_BUILD_BRANCH}, built ${TRANSCRIBE_BUILD_DATE}, backend ${TRANSCRIBE_BUILD_BACKEND})")
 
 # -----------------------------------------------------------------------------

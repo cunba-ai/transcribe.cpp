@@ -65,6 +65,30 @@ public final class Model: @unchecked Sendable {
         ptr = out
     }
 
+    /// Load the Silero VAD model embedded in the native library at its build
+    /// time (CMake `TRANSCRIBE_EMBED_VAD_MODEL`); no model file on disk, and
+    /// the model serves the VAD role only. Runs the pre-1.0 version gate
+    /// first. Throws `.notImplemented` when the library was built without the
+    /// embedded asset.
+    public static func embeddedVad(options: ModelOptions = .init()) throws -> Model {
+        try Transcribe.ensureCompatible()
+        var params = transcribe_model_load_params()
+        transcribe_model_load_params_init(&params)
+        params.backend = options.backend.cValue
+        params.device = options.device?.handle
+        var out: OpaquePointer?
+        let status = transcribe_model_load_embedded_vad(&params, &out)
+        try TranscribeError.check(status, context: "loading embedded VAD model")
+        guard let out else {
+            throw TranscribeError.modelLoad("loading embedded VAD model: null model handle")
+        }
+        return Model(ptr: out)
+    }
+
+    init(ptr: OpaquePointer) {
+        self.ptr = ptr
+    }
+
     deinit { transcribe_model_free(ptr) }
 
     /// Create a transcription session bound to this model.

@@ -494,6 +494,47 @@ transcribe_status stream_tensor_data(const std::string &  path,
     return TRANSCRIBE_OK;
 }
 
+transcribe_status stream_tensor_data_from_memory(const void *         base,
+                                                 size_t               base_size,
+                                                 const gguf_context * gguf_data,
+                                                 ggml_context *       ctx_meta,
+                                                 const char *         error_tag) {
+    // Same walk as stream_tensor_data, but the "file" is an in-memory GGUF
+    // buffer (Loader::adopt). Offsets are in buffer coordinates — offset 0
+    // is the first header byte, exactly what gguf_init_from_buffer parsed —
+    // so every read is a bounds-checked memcpy instead of an ifstream.
+    if (base == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: null gguf buffer", error_tag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    const auto * bytes       = static_cast<const uint8_t *>(base);
+    const size_t data_offset = gguf_get_data_offset(gguf_data);
+
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        const int64_t idx = gguf_find_tensor(gguf_data, t->name);
+        if (idx < 0) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" not in gguf data", error_tag, t->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
+        const size_t nbytes  = ggml_nbytes(t);
+
+        // data_offset + toffset can overflow size_t on hostile metadata;
+        // check in uint64_t (the GGUF types) before casting back.
+        const uint64_t abs64 = static_cast<uint64_t>(data_offset) + static_cast<uint64_t>(toffset);
+        if (abs64 > static_cast<uint64_t>(base_size) ||
+            static_cast<uint64_t>(nbytes) > static_cast<uint64_t>(base_size) - abs64) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" data out of buffer bounds", error_tag, t->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        // ggml_backend_tensor_set handles host vs discrete-GPU buffers.
+        ggml_backend_tensor_set(t, bytes + static_cast<size_t>(abs64), 0, nbytes);
+    }
+
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &                plan,
                                                     const std::vector<ConvPwF32Slot> & slots,
                                                     const char *                       error_tag,

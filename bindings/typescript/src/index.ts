@@ -1768,6 +1768,43 @@ export class TranscribeModel {
     return new TranscribeModel(n, out[0]);
   }
 
+  /**
+   * Load the Silero VAD model embedded in the native library at its build
+   * time (no model file on disk); serves the VAD role only. Throws
+   * {@link NotImplementedByModel} when the library was built without the
+   * embedded asset (CMake `TRANSCRIBE_EMBED_VAD_MODEL` OFF).
+   * Awaits {@link initialize}, so it never blocks the event loop.
+   */
+  static async loadEmbeddedVad(
+    opts: ModelOptions = {},
+  ): Promise<TranscribeModel> {
+    const n = await nativeAsync();
+    const p: any = {};
+    n.F.modelLoadParamsInit(p);
+    if ("gpuDevice" in opts) {
+      throw new TranscribeError(
+        "gpuDevice was removed in 0.2; pass a device from getAvailableBackends() instead",
+      );
+    }
+    if (opts.backend) p.backend = lookup(BACKENDS, opts.backend, "backend");
+    if (opts.device !== undefined) {
+      const handle = DEVICE_HANDLES.get(opts.device);
+      if (!handle) {
+        throw new TranscribeError(
+          "device must be an entry returned by getAvailableBackends() or model.device",
+        );
+      }
+      p.device = handle;
+    }
+
+    const out: any[] = [null];
+    const st = await callAsync<number>(n.F.modelLoadEmbeddedVad, p, out);
+    check(n, st, "loading embedded VAD model");
+    if (!out[0])
+      throw new ModelLoadError("embedded VAD load returned a null handle");
+    return new TranscribeModel(n, out[0]);
+  }
+
   /** @internal */
   get handle(): any {
     if (this.#disposed) throw new TranscribeError("model has been disposed");

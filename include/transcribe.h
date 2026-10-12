@@ -1588,6 +1588,24 @@ TRANSCRIBE_API transcribe_status transcribe_model_load_file(const char *        
                                                             struct transcribe_model **                  out_model);
 
 /*
+ * Load the Silero VAD model embedded in the library binary at build time
+ * (CMake option TRANSCRIBE_EMBED_VAD_MODEL, default ON). The embedded copy
+ * is the Silero VAD v6.2 F32 GGUF documented in docs/models/silero-vad-v6.2.md
+ * — the same weights transcribe_model_load_file reads from that file — so a
+ * VAD-role user needs no external model file at all.
+ *
+ * Semantics mirror transcribe_model_load_file: params may be NULL for all
+ * library defaults (the same struct and validation), on success *out_model
+ * is set and the caller owns it (free with transcribe_model_free), and on
+ * every failure *out_model is NULL and nothing leaks.
+ *
+ * When the library was built with the option OFF, this entry point is still
+ * exported but always returns TRANSCRIBE_ERR_NOT_IMPLEMENTED.
+ */
+TRANSCRIBE_API transcribe_status transcribe_model_load_embedded_vad(const struct transcribe_model_load_params * params,
+                                                                    struct transcribe_model ** out_model);
+
+/*
  * Free a model. Only valid after every session derived from this model
  * has been freed and no thread is still using the model. Passing NULL
  * is a no-op.

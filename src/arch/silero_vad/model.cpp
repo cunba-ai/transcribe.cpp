@@ -101,15 +101,23 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
+    // The in-memory branch (Loader::adopt, embedded asset) re-opens the
+    // same buffer instead of a path; everything downstream is identical.
+    const bool from_memory = loader.mem_data() != nullptr;
+
     GgufGuard guard;
     {
         gguf_init_params init_params{};
         init_params.no_alloc = true;
         init_params.ctx      = &m->ctx_meta;
-        guard.ctx            = gguf_init_from_file(loader.path().c_str(), init_params);
+        if (from_memory) {
+            guard.ctx = gguf_init_from_buffer(loader.mem_data(), loader.mem_size(), init_params);
+        } else {
+            guard.ctx = gguf_init_from_file(loader.path().c_str(), init_params);
+        }
         if (guard.ctx == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen \"%s\" for tensor data", kTag,
-                    loader.path().c_str());
+                    from_memory ? "<embedded>" : loader.path().c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -120,7 +128,14 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (auto st = init_storage(*m, params); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag); st != TRANSCRIBE_OK) {
+    if (from_memory) {
+        if (auto st = load_common::stream_tensor_data_from_memory(loader.mem_data(), loader.mem_size(), guard.ctx,
+                                                                  m->ctx_meta, kTag);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    } else if (auto st = load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag);
+               st != TRANSCRIBE_OK) {
         return st;
     }
     if (auto st = build_derived_weights(*m); st != TRANSCRIBE_OK) {

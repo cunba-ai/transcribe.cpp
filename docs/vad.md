@@ -7,6 +7,17 @@ into speech segments. API: `include/transcribe/vad.h`. The shipped model is
 `transcribe_model_load_file` also accepts whisper.cpp's
 `ggml-silero-v5.1.2.bin` and `ggml-silero-v6.2.0.bin`.
 
+## No model file: the embedded VAD
+
+The library embeds the Silero VAD v6.2 F32 weights at build time (CMake
+option `TRANSCRIBE_EMBED_VAD_MODEL`, default ON; the build fetches the GGUF
+from the model page into `<build>/model-cache/`, or takes an explicit copy
+via `-DTRANSCRIBE_EMBED_VAD_MODEL_FILE=<path>`). Load it with
+`transcribe_model_load_embedded_vad(NULL, &m)` — same params, ownership and
+error contract as `transcribe_model_load_file`, but no file on disk. Built
+with the option OFF, the entry point still exists and returns
+`TRANSCRIBE_ERR_NOT_IMPLEMENTED`.
+
 ## Offline
 
 ```c

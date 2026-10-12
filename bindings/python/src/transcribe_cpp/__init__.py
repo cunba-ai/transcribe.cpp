@@ -1067,6 +1067,44 @@ class Model:
         # the load call so the failure path of __del__ finds it.
         self._sessions = weakref.WeakSet()
         self._init_compute_state()
+        params = self._load_params(backend, device)
+
+        handle = ctypes.c_void_p()
+        status = _lib.transcribe_model_load_file(
+            os.fspath(path).encode("utf-8"), _byref(params), _byref(handle)
+        )
+        _check(status, f"loading model {os.fspath(path)!r}")
+        if not handle.value:
+            raise ModelLoadError(f"model load returned a null handle for {path!r}")
+        self._handle = handle
+
+    @classmethod
+    def embedded_vad(cls, *, backend: Backend = "auto",
+                     device: BackendDevice | None = None) -> "Model":
+        """Load the Silero VAD model embedded in the native library at its
+        build time (no model file on disk). The same weights as
+        ``Model(path_to_silero_vad_gguf)``; serves the VAD role only. Raises
+        :class:`TranscribeError` (``NOT_IMPLEMENTED``) when the library was
+        built without the embedded asset (CMake ``TRANSCRIBE_EMBED_VAD_MODEL``
+        OFF). ``backend`` / ``device`` are as for ``Model``."""
+        m = cls.__new__(cls)
+        m._sessions = weakref.WeakSet()
+        m._init_compute_state()
+        params = m._load_params(backend, device)
+        handle = ctypes.c_void_p()
+        status = _lib.transcribe_model_load_embedded_vad(
+            _byref(params), _byref(handle)
+        )
+        _check(status, "loading embedded VAD model")
+        if not handle.value:
+            raise ModelLoadError("embedded VAD load returned a null handle")
+        m._handle = handle
+        return m
+
+    def _load_params(self, backend: Backend,
+                     device: BackendDevice | None) -> _ModelLoadParams:
+        """Build the validated native load params shared by the file and
+        embedded-VAD constructors (NULL-out defaulting happens natively)."""
         backend_source = "backend"
         if backend == "auto" and os.environ.get("TRANSCRIBE_BACKEND"):
             backend = os.environ["TRANSCRIBE_BACKEND"]  # type: ignore[assignment]
@@ -1078,15 +1116,7 @@ class Model:
             if not isinstance(device, BackendDevice) or device._handle is None:
                 raise TypeError("device must be a BackendDevice returned by backends()")
             params.device = device._handle
-
-        handle = ctypes.c_void_p()
-        status = _lib.transcribe_model_load_file(
-            os.fspath(path).encode("utf-8"), _byref(params), _byref(handle)
-        )
-        _check(status, f"loading model {os.fspath(path)!r}")
-        if not handle.value:
-            raise ModelLoadError(f"model load returned a null handle for {path!r}")
-        self._handle = handle
+        return params
 
     @property
     def _h(self) -> ctypes.c_void_p:

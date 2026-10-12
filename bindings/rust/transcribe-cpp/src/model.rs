@@ -168,6 +168,40 @@ impl Model {
         })
     }
 
+    /// Load the Silero VAD model embedded in the native library at its
+    /// build time (CMake `TRANSCRIBE_EMBED_VAD_MODEL`, default ON). Needs no
+    /// model file on disk. Errors with [`Error::NotImplemented`] when the
+    /// library was built without the embedded asset.
+    pub fn load_embedded_vad() -> Result<Model> {
+        Model::load_embedded_vad_with(&ModelOptions::default())
+    }
+
+    /// [`Model::load_embedded_vad`] with explicit options.
+    pub fn load_embedded_vad_with(options: &ModelOptions) -> Result<Model> {
+        // Pre-1.0 base-version lock against the loaded library (once).
+        version::ensure_compatible()?;
+
+        let mut params: sys::transcribe_model_load_params = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_model_load_params_init(&mut params) };
+        params.backend = options.backend.to_raw();
+        params.device = options
+            .device
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |device| device.handle);
+
+        let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
+        let status = unsafe { sys::transcribe_model_load_embedded_vad(&params, &mut out) };
+        check_model_load(status, "load embedded VAD")?;
+        debug_assert!(!out.is_null());
+
+        Ok(Model {
+            inner: Arc::new(ModelInner {
+                ptr: out,
+                compute_lock: Mutex::new(false),
+            }),
+        })
+    }
+
     /// Open a session bound to this model with default session options.
     pub fn session(&self) -> Result<Session> {
         self.session_with(&SessionOptions::default())

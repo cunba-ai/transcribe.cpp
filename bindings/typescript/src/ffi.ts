@@ -71,6 +71,10 @@ export function bindLibrary(libraryPath: string): Bound {
       inp(T.transcribe_model_load_params),
       handleOut,
     ]),
+    modelLoadEmbeddedVad: lib.func("transcribe_model_load_embedded_vad", "int", [
+      inp(T.transcribe_model_load_params),
+      handleOut,
+    ]),
     modelFree: lib.func("transcribe_model_free", "void", ["void *"]),
     modelArch: lib.func("transcribe_model_arch_string", "str", ["void *"]),
     modelVariant: lib.func("transcribe_model_variant_string", "str", ["void *"]),
