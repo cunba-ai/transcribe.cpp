@@ -221,6 +221,21 @@ void apply_prompting(const cli_args & args, transcribe_run_params & rp, std::vec
 
 namespace transcribe_cli {
 
+bool run_path_capable(const struct transcribe_model * model) {
+    const uint32_t roles = transcribe_model_roles(model);
+    if ((roles & TRANSCRIBE_ROLE_ASR) == 0) {
+        return false;
+    }
+    // ASR + DIARIZE roles with the embedded-diarization feature diarize
+    // through transcribe_run (moss / granite-plus / multitalker parakeet);
+    // without it the DIARIZE role marks a standalone diarizer whose ASR
+    // session exists only for the push-audio stream extension.
+    if ((roles & TRANSCRIBE_ROLE_DIARIZE) != 0 && !transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION)) {
+        return false;
+    }
+    return true;
+}
+
 bool write_output_file(std::ofstream * output, const std::string & path, const char * text) {
     if (output == nullptr) {
         return true;
@@ -285,9 +300,9 @@ int run_asr_batch(const cli_args & args, std::ofstream * output) {
         std::fprintf(stderr, "model load: %s\n", transcribe_status_string(load_st));
         return EXIT_FAILURE;
     }
-    if ((transcribe_model_roles(model) & TRANSCRIBE_ROLE_ASR) == 0) {
+    if (!run_path_capable(model)) {
         std::fprintf(stderr,
-                     "error: --batch is ASR-only and this model has no ASR role; "
+                     "error: --batch is ASR-only and this model cannot run one-shot ASR; "
                      "run it on one file instead: transcribe-cli -m MODEL audio.wav\n");
         transcribe_model_free(model);
         return EXIT_FAILURE;

@@ -119,6 +119,13 @@ struct cli_args {
 // Returns false (after an error message naming `path`) on a write failure.
 bool write_output_file(std::ofstream * output, const std::string & path, const char * text);
 
+// Whether the run/batch (one-shot ASR) drivers can actually execute this
+// model. True requires the ASR role; a model that ALSO serves DIARIZE
+// without the embedded-diarization feature (sortformer: its ASR session
+// exists for the push-audio stream extension, one-shot run is
+// NOT_IMPLEMENTED) is a standalone diarizer and takes the diarize driver.
+bool run_path_capable(const struct transcribe_model * model);
+
 // ASR batch driver (asr.cpp): loads the model, runs every listed file, prints,
 // and returns the process exit code.
 int run_asr_batch(const cli_args & args, std::ofstream * output);

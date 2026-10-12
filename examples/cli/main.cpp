@@ -629,7 +629,11 @@ int run_file(const cli_args & args, std::ofstream * output) {
     }
 
     const uint32_t roles = transcribe_model_roles(model);
-    if ((roles & TRANSCRIBE_ROLE_ASR) != 0) {
+    // The ASR run/batch driver needs a run-capable model: sortformer's ASR
+    // role exists only for its push-audio streaming session (one-shot
+    // transcribe_run is NOT_IMPLEMENTED there), so it takes the diarize
+    // driver. See run_path_capable.
+    if (transcribe_cli::run_path_capable(model)) {
         return transcribe_cli::run_asr_file(args, model, pcm, duration_s, output);
     }
     if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
