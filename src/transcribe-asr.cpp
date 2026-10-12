@@ -1481,6 +1481,29 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     return session->model->arch->run(session, pcm, n_samples, params);
 }
 
+// Completion handshake shared by the single-run and both batch paths: the
+// final progress emission after a finished (OK) run doubles as the cancel
+// probe. A non-zero callback return means cancel — mark the session
+// aborted and convert the status to TRANSCRIBE_ERR_ABORTED, preserving the
+// finished results. A non-OK status passes through untouched (an already
+// aborted run does not get a second chance to abort).
+//
+// The stage label is built lazily, only for a finished run: a rejected
+// call may still carry a malformed session (the single-run path reaches
+// here with INVALID_ARG for a fake (session *)0x1 / NULL pcm — the API
+// smoke probes exactly that), and it must not be dereferenced.
+static transcribe_status complete_with_progress(transcribe_session * session, int64_t total, transcribe_status st) {
+    if (st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const std::string stage = transcribe::asr_progress_stage(session);
+    if (session->emit_progress(stage.c_str(), total, total) != 0) {
+        session->was_aborted = true;
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+    return st;
+}
+
 static transcribe_status transcribe_run_impl(struct transcribe_session *          session,
                                              const float *                        pcm,
                                              int                                  n_samples,
@@ -1507,16 +1530,12 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
     transcribe::ScratchReleaseGuard scratch_release;
     scratch_release.session    = session;
     const transcribe_status st = run_one_inner(session, pcm, n_samples, params, &scratch_release.armed);
-    // Completion handshake for a successful single run ("asr+<arch>", 1, 1).
-    // A non-zero callback return means cancel: mark aborted and report
-    // TRANSCRIBE_ERR_ABORTED with the finished result preserved in the
-    // scratch slot — the same rule the batch loops apply at their final
-    // utterance.
-    if (st == TRANSCRIBE_OK && session->emit_progress(transcribe::asr_progress_stage(session).c_str(), 1, 1) != 0) {
-        session->was_aborted = true;
-        return TRANSCRIBE_ERR_ABORTED;
-    }
-    return st;
+    // Completion handshake for a successful single run ("asr+<arch>", 1, 1)
+    // — the same rule the batch loops apply at their final utterance
+    // (complete_with_progress). The stage string is built inside the
+    // handshake (only for a finished run): this path also returns rejected
+    // calls with a fake session, which must not be dereferenced.
+    return complete_with_progress(session, 1, st);
 }
 
 // Batch run (offline)
@@ -1677,11 +1696,9 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
         transcribe_status st = session->model->arch->run_batch(session, pcm, n_samples, n, params);
         // Completion handshake (skipped when the hook itself aborted): a
         // canceling callback converts a finished batch into ABORTED with
-        // every result preserved — the pre-merge final-chunk rule.
-        if (st == TRANSCRIBE_OK && session->emit_progress(stage.c_str(), n, n) != 0) {
-            session->was_aborted = true;
-            st                   = TRANSCRIBE_ERR_ABORTED;
-        }
+        // every result preserved — the pre-merge final-chunk rule. Builds
+        // its own stage label (same "asr+<arch>" string as the bookend).
+        st                   = complete_with_progress(session, n, st);
         // On abort the hook may retain only completed results; synthesize any
         // missing slots so the result-set view always exposes n entries.
         if (st == TRANSCRIBE_ERR_ABORTED) {
@@ -1704,10 +1721,7 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
 
     // Same completion handshake as the fast path (the serial loop emits only
     // the intermediate per-utterance boundaries).
-    if (batch_status == TRANSCRIBE_OK && session->emit_progress(stage.c_str(), n, n) != 0) {
-        session->was_aborted = true;
-        batch_status         = TRANSCRIBE_ERR_ABORTED;
-    }
+    batch_status = complete_with_progress(session, n, batch_status);
 
     // On abort the loop can break early, leaving fewer than n entries;
     // synthesize any missing slots so the result-set view always exposes n

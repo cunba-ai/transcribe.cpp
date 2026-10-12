@@ -239,6 +239,13 @@ transcribe_status run_batch_serial(transcribe_session *  session,
             rs.status = st;
             session->batch_results.push_back(std::move(rs));
         }
+        // An utterance that itself aborted is not counted as completed:
+        // return before the progress emission (INVALID_ARG and other
+        // non-abort failures still count — they produced a result slot).
+        if (st == TRANSCRIBE_ERR_ABORTED) {
+            session->was_truncated = any_truncated;
+            return TRANSCRIBE_ERR_ABORTED;
+        }
         // Per-utterance progress ("asr+<arch>", i+1, n). The run_batch
         // dispatcher owns the 0/n and n/n bookends, so the last utterance
         // does not emit here. A non-zero callback return means cancel:
@@ -247,10 +254,6 @@ transcribe_status run_batch_serial(transcribe_session *  session,
         if (i + 1 < n && session->emit_progress(stage.c_str(), i + 1, n) != 0) {
             session->was_truncated = any_truncated;
             session->was_aborted   = true;
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        if (st == TRANSCRIBE_ERR_ABORTED) {
-            session->was_truncated = any_truncated;
             return TRANSCRIBE_ERR_ABORTED;
         }
     }
