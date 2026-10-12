@@ -130,7 +130,14 @@ transcribe_status resolve_roles(transcribe_model * model) {
     }
     const Arch & arch        = *model->arch;
     const char * name        = arch.name != nullptr ? arch.name : "(unknown)";
-    const bool   has_asr     = arch.init_context != nullptr && arch.run != nullptr;
+    // The ASR session surface needs init_context plus at least one of the
+    // one-shot run path or the full streaming hook trio. A stream-only arch
+    // (sortformer's push-audio diarizer: run/run_batch null, stream hooks
+    // present) legitimately serves the ASR session; transcribe_run on it
+    // returns NOT_IMPLEMENTED at the dispatcher's run-hook check.
+    const bool   has_asr     = arch.init_context != nullptr &&
+                               (arch.run != nullptr || (arch.stream_begin != nullptr && arch.stream_feed != nullptr &&
+                                                        arch.stream_finalize != nullptr));
     const bool   has_diarize = arch.diarize != nullptr;
     const bool   has_langid  = arch.langid != nullptr;
     const bool   has_vad     = arch.vad != nullptr;
@@ -146,7 +153,7 @@ transcribe_status resolve_roles(transcribe_model * model) {
     } else if ((model->roles & ~known) != 0) {
         why = "sets an unknown role bit";
     } else if ((model->roles & TRANSCRIBE_ROLE_ASR) != 0 && !has_asr) {
-        why = "sets the ASR role without init_context / run hooks";
+        why = "sets the ASR role without init_context / run or stream hooks";
     } else if ((model->roles & TRANSCRIBE_ROLE_DIARIZE) != 0 && !has_diarize) {
         why = "sets the DIARIZE role without a diarize ops table";
     } else if ((model->roles & TRANSCRIBE_ROLE_LANGID) != 0 && !has_langid) {

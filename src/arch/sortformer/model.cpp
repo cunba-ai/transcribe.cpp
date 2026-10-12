@@ -632,7 +632,16 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    m->roles = TRANSCRIBE_ROLE_DIARIZE;
+    // Roles: DIARIZE (the offline transcribe_diarize_* surface) plus the
+    // ASR-session surface the push-audio streaming extension lives on:
+    // transcribe_session_init -> transcribe_stream_begin with the SFPS
+    // stream ext. run / run_batch stay null, so one-shot ASR entry points
+    // return NOT_IMPLEMENTED on this model — the session exists for the
+    // STREAM slot only. Pre-merge parity: caps.supports_streaming was set
+    // by the fork loader and the streaming gate in transcribe_stream_begin
+    // requires it.
+    m->roles                   = TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_ASR;
+    m->caps.supports_streaming = true;
     // The abort callback is honored (transcribe_diarize_set_abort_callback).
     transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_CANCELLATION, true);
     m->t_load_us = ggml_time_us() - t_load_start;

@@ -101,8 +101,11 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // 1. Roles, info, extension probe.
-    CHECK(transcribe_model_roles(model) == TRANSCRIBE_ROLE_DIARIZE);
+    // 1. Roles, info, extension probe. The ASR bit alongside DIARIZE is the
+    // push-audio streaming session surface (transcribe_session_init +
+    // transcribe_stream_begin with the SFPS ext); run/run_batch stay null,
+    // so the one-shot ASR entry points are NOT_IMPLEMENTED on this model.
+    CHECK(transcribe_model_roles(model) == (TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_ASR));
     CHECK(!transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION));
     CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_CANCELLATION));
     transcribe_diarize_info info;

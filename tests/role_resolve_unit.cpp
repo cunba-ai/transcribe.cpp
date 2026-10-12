@@ -30,6 +30,10 @@ transcribe_status fake_run(transcribe_session *, const float *, int, const trans
     return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
 }
 
+transcribe_status fake_stream_finalize(transcribe_session *, transcribe_stream_update *) {
+    return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+}
+
 const transcribe::Arch k_asr_arch = {
     /* .name             = */ "fake_asr",
     /* .load             = */ nullptr,
@@ -43,6 +47,37 @@ const transcribe::Arch k_half_asr_arch = {
     /* .load             = */ nullptr,
     /* .init_context     = */ fake_init_context,
 };
+
+// Stream-only ASR arch (the sortformer shape): init_context + the full
+// streaming trio, no one-shot run hook. Legitimately serves the ASR session
+// surface via transcribe_stream_begin; transcribe_run on it is the
+// dispatcher's NOT_IMPLEMENTED.
+transcribe::Arch make_stream_only_arch() {
+    transcribe::Arch a = {};
+    a.name             = "fake_stream_only";
+    a.init_context     = fake_init_context;
+    a.stream_begin     = [](transcribe_session *, const transcribe_run_params *, const transcribe_stream_params *) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    };
+    a.stream_feed = [](transcribe_session *, const float *, int, transcribe_stream_update *) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    };
+    a.stream_finalize = fake_stream_finalize;
+    return a;
+}
+
+const transcribe::Arch k_stream_only_arch = make_stream_only_arch();
+
+// init_context + stream_begin but no feed/finalize: an incomplete trio is
+// still not a usable ASR arch.
+transcribe::Arch make_partial_stream_arch() {
+    transcribe::Arch a = make_stream_only_arch();
+    a.name             = "fake_partial_stream";
+    a.stream_feed      = nullptr;
+    return a;
+}
+
+const transcribe::Arch k_partial_stream_arch = make_partial_stream_arch();
 
 const transcribe::Arch k_no_role_arch = {
     /* .name             = */ "fake_no_role",
@@ -97,27 +132,32 @@ void test_resolve_roles() {
     };
 
     const Case cases[] = {
-        { &k_asr_arch,      0,                TRANSCRIBE_OK,                  ASR }, // defaults to ASR
-        { &k_asr_arch,      ASR,              TRANSCRIBE_OK,                  ASR },
-        { &k_diarize_arch,  DIA,              TRANSCRIBE_OK,                  DIA },
-        { &k_diarize_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no default for non-ASR roles
-        { &k_no_role_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_half_asr_arch, 0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_half_asr_arch, ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      DIA,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_diarize_arch,  ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   LID,              TRANSCRIBE_OK,                  LID },
-        { &k_langid_arch,   0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no langid ops table
-        { &k_diarize_arch,  DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_vad_arch,      VAD,              TRANSCRIBE_OK,                  VAD },
-        { &k_vad_arch,      0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no vad ops table
-        { &k_vad_arch,      ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // unknown bit
-        { nullptr,          0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_asr_arch,            0,                TRANSCRIBE_OK,                  ASR }, // defaults to ASR
+        { &k_asr_arch,            ASR,              TRANSCRIBE_OK,                  ASR },
+        { &k_diarize_arch,        DIA,              TRANSCRIBE_OK,                  DIA },
+        { &k_diarize_arch,        0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no default for non-ASR roles
+        { &k_no_role_arch,        0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_half_asr_arch,       0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_half_asr_arch,       ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        // Stream-only ASR: the full trio satisfies the ASR session contract.
+        { &k_stream_only_arch,    0,                TRANSCRIBE_OK,                  ASR },
+        { &k_stream_only_arch,    ASR,              TRANSCRIBE_OK,                  ASR },
+        { &k_stream_only_arch,    ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no diarize ops table
+        { &k_partial_stream_arch, ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // incomplete trio
+        { &k_asr_arch,            DIA,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_asr_arch,            ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_diarize_arch,        ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_langid_arch,         LID,              TRANSCRIBE_OK,                  LID },
+        { &k_langid_arch,         0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_asr_arch,            LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no langid ops table
+        { &k_diarize_arch,        DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_langid_arch,         ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_vad_arch,            VAD,              TRANSCRIBE_OK,                  VAD },
+        { &k_vad_arch,            0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_langid_arch,         VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no vad ops table
+        { &k_vad_arch,            ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_asr_arch,            ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // unknown bit
+        { nullptr,                0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
     };
     for (const Case & c : cases) {
         transcribe_model model;
