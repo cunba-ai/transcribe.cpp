@@ -188,7 +188,6 @@ struct DiarStreamScratch {
 struct SortformerSession final : public transcribe_diarize_session {
     // Per-session scratch reused across runs.
     std::vector<float> mel_buf;
-    std::vector<float> probs_host;  // [n_spk * T], read back from diar.preds
 
     // Streaming scratch (AOSC/FIFO path + rel-pos tables, shared with the
     // offline forward's pos_emb fill).
@@ -201,12 +200,8 @@ struct SortformerSession final : public transcribe_diarize_session {
 // DIARIZE role (SortformerSession / transcribe_diarize_run). Owns the same
 // per-session scratch plus the push-stream state machine.
 struct SortformerRunSession final : public transcribe_session {
-    // Per-session scratch reused across runs.
-    std::vector<float> mel_buf;
-    std::vector<float> probs_host;  // [n_spk * T], read back from diar.preds
-
-    // Streaming scratch (AOSC/FIFO path + rel-pos tables, shared with the
-    // offline forward's pos_emb fill).
+    // Streaming scratch (AOSC/FIFO path + rel-pos tables). The push path's
+    // bounded tails live in `push` below; there is no whole-file mel here.
     DiarStreamScratch scratch;
 
     // Push-audio streaming state (STREAM slot; see docs/porting/families/

@@ -677,8 +677,10 @@ transcribe_status fuse_embedded_diar_bn(SortformerEmbedded &    e,
 }
 
 // Lazily create the persistent multi-backend scheduler shared by the offline
-// and streaming graphs.
-template <typename SessT> static transcribe_status ensure_sched(SessT * pc, SortformerModel * pm) {
+// and streaming graphs. Only touches the SessionCore sched slot, so it serves
+// both session types (diarize-side SortformerSession and ASR-side
+// SortformerRunSession).
+static transcribe_status ensure_sched(transcribe::SessionCore * pc, SortformerModel * pm) {
     if (pc->sched == nullptr) {
         pc->sched = ggml_backend_sched_new(pm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(pm->plan.scheduler_list.size()),
@@ -693,8 +695,7 @@ template <typename SessT> static transcribe_status ensure_sched(SessT * pc, Sort
 // Offline full-context forward. Builds the whole encoder + transformer + diar
 // head over the entire mel and dumps the Stage-4 parity tensors (enc.* +
 // diar.preds_offline). Invoked only when tensor dumping is active (the
-template <typename SessT>
-static transcribe_status run_offline_forward(SessT * pc, SortformerModel * pm, int mel_n_frames) {
+static transcribe_status run_offline_forward(SortformerSession * pc, SortformerModel * pm, int mel_n_frames) {
     if (pc->compute_ctx != nullptr) {
         ggml_free(pc->compute_ctx);
         pc->compute_ctx = nullptr;
@@ -982,8 +983,7 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
 
 // Family wrapper: resolve the operating point, run the core, trim, dump,
 // and hand back the frame probabilities.
-template <typename SessT>
-static transcribe_status run_streaming(SessT *                      pc,
+static transcribe_status run_streaming(SortformerSession *          pc,
                                        SortformerModel *            pm,
                                        int                          mel_n_mels,
                                        int                          mel_n_frames,
@@ -1024,9 +1024,9 @@ static transcribe_status run_streaming(SessT *                      pc,
     return TRANSCRIBE_OK;
 }
 
-// Mel -> (optional offline parity dump) -> streaming forward.
-template <typename SessT>
-static transcribe_status diarize_pcm(SessT *                      pc,
+// Mel -> (optional offline parity dump) -> streaming forward. Only the
+// DIARIZE-role path (diarize_run on a SortformerSession) drives this.
+static transcribe_status diarize_pcm(SortformerSession *          pc,
                                      SortformerModel *            pm,
                                      const float *                pcm,
                                      int                          n_samples,
@@ -1084,13 +1084,15 @@ int64_t push_frames_ready(const SortformerRunSession::PushStream & ps) {
     return (ps.total_samples - static_cast<int64_t>(ps.pad)) / ps.hop + 1;
 }
 
-// Compute all newly-supported mel frames [mel_computed, frames_ready).
+// Compute newly-supported mel frames [mel_computed, target). The default
+// target is push_frames_ready(ps) (every frame fully supported by arrived
+// samples); finalize passes an explicit target for the last real frames.
 // The mel tail is stored frame-major: frame j at ps.mel[j * n_mels + m],
 // so appending columns is a plain insert (transpose of the [n_mels, n]
 // compute_frames output).
-transcribe_status push_compute_mel(SortformerRunSession * pc, SortformerModel * pm) {
+transcribe_status push_compute_mel(SortformerRunSession * pc, SortformerModel * pm, int64_t target_frames = -1) {
     auto &        ps     = pc->push;
-    const int64_t target = push_frames_ready(ps);
+    const int64_t target = target_frames >= 0 ? target_frames : push_frames_ready(ps);
     if (target <= ps.mel_computed) {
         return TRANSCRIBE_OK;
     }
@@ -1176,19 +1178,22 @@ transcribe_status push_emit_chunk(SortformerRunSession * pc,
     }
 
     // Slice frames [win_lo, win_hi) of the frame-major mel tail into the
-    // [n_mels, M] window buffer the graph expects (bin-major rows).
-    const size_t       off = static_cast<size_t>(win_lo - ps.mel_start);
-    std::vector<float> window(static_cast<size_t>(ps.n_mels) * static_cast<size_t>(M));
+    // [n_mels, M] window buffer the graph expects (bin-major rows). Reuse
+    // the scratch chunk window buffer like the offline core loop does
+    // (run_diar_streaming_window copies out of it before returning, so
+    // per-chunk reuse is safe).
+    const size_t off = static_cast<size_t>(win_lo - ps.mel_start);
+    pc->scratch.chunk_mel_buf.resize(static_cast<size_t>(ps.n_mels) * static_cast<size_t>(M));
     for (int j = 0; j < M; ++j) {
         for (int m = 0; m < ps.n_mels; ++m) {
-            window[static_cast<size_t>(m) * static_cast<size_t>(M) + static_cast<size_t>(j)] =
+            pc->scratch.chunk_mel_buf[static_cast<size_t>(m) * static_cast<size_t>(M) + static_cast<size_t>(j)] =
                 ps.mel[(off + static_cast<size_t>(j)) * static_cast<size_t>(ps.n_mels) + static_cast<size_t>(m)];
         }
     }
 
     if (const transcribe_status st = run_diar_streaming_window(
             pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer, pm->weights, pm->backend.c_str(), pc->sched,
-            pc->n_threads, ps.params, ps.n_mels, window.data(), M, lc, rc, /*drop=*/0);
+            pc->n_threads, ps.params, ps.n_mels, pc->scratch.chunk_mel_buf.data(), M, lc, rc, /*drop=*/0);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -1198,14 +1203,26 @@ transcribe_status push_emit_chunk(SortformerRunSession * pc,
     return TRANSCRIBE_OK;
 }
 
+// Turn-close order, shared by decode_stream_turns' closed sort and
+// push_refresh_rows' finalize merge: (t1_ms, speaker_id, t0_ms). A turn's
+// closure is detected in the first window containing a frame past its end,
+// so newly closed turns always sort after every already-committed turn —
+// this ordering is what makes the committed row set append-only across
+// windows.
+bool turn_close_less(const transcribe::SpeakerSegmentEntry & a, const transcribe::SpeakerSegmentEntry & b) {
+    if (a.t1_ms != b.t1_ms) {
+        return a.t1_ms < b.t1_ms;
+    }
+    if (a.speaker_id != b.speaker_id) {
+        return a.speaker_id < b.speaker_id;
+    }
+    return a.t0_ms < b.t0_ms;
+}
+
 // Threshold-decode the accumulated probs into closed + open turns (same
 // 0.5-threshold run extraction as probs_to_speaker_segments). Closed
-// turns are returned sorted by (t1_ms, speaker_id, t0_ms) — turn-close
-// order, which makes the committed row set append-only across windows:
-// a turn's closure is detected in the first window containing a frame
-// past its end, so newly closed turns always sort after every already-
-// committed turn. Open turns (run reaching frame T) sort by (t0_ms,
-// speaker_id).
+// turns are returned sorted by turn-close order (turn_close_less); open
+// turns (run reaching frame T) sort by (t0_ms, speaker_id).
 void decode_stream_turns(const std::vector<float> &                     probs,
                          int                                            T,
                          int                                            n_spk,
@@ -1242,15 +1259,7 @@ void decode_stream_turns(const std::vector<float> &                     probs,
             open.push_back(row);
         }
     }
-    std::sort(closed.begin(), closed.end(), [](const auto & a, const auto & b) {
-        if (a.t1_ms != b.t1_ms) {
-            return a.t1_ms < b.t1_ms;
-        }
-        if (a.speaker_id != b.speaker_id) {
-            return a.speaker_id < b.speaker_id;
-        }
-        return a.t0_ms < b.t0_ms;
-    });
+    std::sort(closed.begin(), closed.end(), turn_close_less);
     std::sort(open.begin(), open.end(), [](const auto & a, const auto & b) {
         if (a.t0_ms != b.t0_ms) {
             return a.t0_ms < b.t0_ms;
@@ -1288,15 +1297,7 @@ void push_refresh_rows(SortformerRunSession * pc,
         // Trailing turns close at the final timestamp; they sort after
         // every already-closed turn (their t1 is the edge time).
         closed.insert(closed.end(), ps.tentative.begin(), ps.tentative.end());
-        std::sort(closed.begin(), closed.end(), [](const auto & a, const auto & b) {
-            if (a.t1_ms != b.t1_ms) {
-                return a.t1_ms < b.t1_ms;
-            }
-            if (a.speaker_id != b.speaker_id) {
-                return a.speaker_id < b.speaker_id;
-            }
-            return a.t0_ms < b.t0_ms;
-        });
+        std::sort(closed.begin(), closed.end(), turn_close_less);
         ps.tentative.clear();
     }
 
@@ -1309,34 +1310,36 @@ void push_refresh_rows(SortformerRunSession * pc,
     pc->has_result           = true;
 }
 
-}  // namespace
+// True when the model can serve the push-stream path: backends resolved,
+// scheduler candidates present, and a mel frontend attached.
+bool push_model_ready(const SortformerModel * pm) {
+    return pm != nullptr && !pm->plan.scheduler_list.empty() && pm->mel.has_value();
+}
 
-static transcribe_status push_stream_validate(const transcribe_session *       session,
-                                              const transcribe_run_params *    run_params,
-                                              const transcribe_stream_params * stream_params) {
-    (void) run_params;
-    // Frontend preflight: the push path's incremental mel is the
-    // constant-pad / normalize=none / no-log-clamp combination (see
-    // MelFrontend::compute_frames). Reject an incompatible frontend KV
-    // here, pre-clear, so a GGUF that decodes fine offline cannot begin a
-    // stream and only fail at the first feed.
-    if (session != nullptr && session->model != nullptr) {
-        const auto * pm = static_cast<const SortformerModel *>(session->model);
-        if (pm == nullptr || !pm->mel.has_value()) {
+// Preset range gate shared by the diarize RUN-slot and push STREAM-slot
+// entry points.
+transcribe_status check_preset(int preset) {
+    switch (preset) {
+        case TRANSCRIBE_SORTFORMER_PRESET_DEFAULT:
+        case TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY:
+        case TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY:
+        case TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY:
+            return TRANSCRIBE_OK;
+        default:
             return TRANSCRIBE_ERR_INVALID_ARG;
-        }
-        const transcribe::MelConfig & cfg = pm->mel->config();
-        if (cfg.pad_mode != "constant" || cfg.normalize != "none" || cfg.log_clamp_min != 0.0f) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                    "sortformer: push-audio streaming requires pad_mode=constant, normalize=none "
-                    "and no log_clamp_min (got pad_mode=%s, normalize=%s, log_clamp_min=%g); "
-                    "use transcribe_run for this frontend",
-                    cfg.pad_mode.c_str(), cfg.normalize.c_str(), static_cast<double>(cfg.log_clamp_min));
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
     }
+}
+
+// Shared SFPS ext unmarshalling for stream_validate and stream_begin:
+// ext kind/size check + preset range check in one place, reading the
+// preset raw (see transcribe::enum_field_raw) so an out-of-range value
+// is rejected before it is loaded as the enum. A NULL family selects
+// DEFAULT.
+transcribe_status push_preset_from_ext(const transcribe_stream_params * stream_params,
+                                       transcribe_sortformer_preset &   preset) {
+    preset = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
     if (stream_params == nullptr || stream_params->family == nullptr) {
-        return TRANSCRIBE_OK;  // NULL ext -> family defaults
+        return TRANSCRIBE_OK;
     }
     if (const transcribe_status st =
             transcribe_ext_check(stream_params->family, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM,
@@ -1345,14 +1348,44 @@ static transcribe_status push_stream_validate(const transcribe_session *       s
         return st;
     }
     const auto * ext = reinterpret_cast<const transcribe_sortformer_push_stream_ext *>(stream_params->family);
-    switch (ext->preset) {
-        case TRANSCRIBE_SORTFORMER_PRESET_DEFAULT:
-        case TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY:
-        case TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY:
-        case TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY:
-            return TRANSCRIBE_OK;
+    if (const transcribe_status st = check_preset(transcribe::enum_field_raw(&ext->preset)); st != TRANSCRIBE_OK) {
+        return st;
     }
-    return TRANSCRIBE_ERR_INVALID_ARG;
+    preset = static_cast<transcribe_sortformer_preset>(transcribe::enum_field_raw(&ext->preset));
+    return TRANSCRIBE_OK;
+}
+
+}  // namespace
+
+static transcribe_status push_stream_validate(const transcribe_session *       session,
+                                              const transcribe_run_params *    run_params,
+                                              const transcribe_stream_params * stream_params) {
+    (void) run_params;
+    // Frontend preflight: the push path's incremental mel requires
+    // MelFrontend::supports_incremental() (constant pad / normalize=none /
+    // no log clamp; see compute_frames). Reject an incompatible frontend
+    // KV here, pre-clear, so a GGUF that decodes fine offline cannot begin
+    // a stream and only fail at the first feed.
+    if (session != nullptr && session->model != nullptr) {
+        const auto * pm = static_cast<const SortformerModel *>(session->model);
+        if (pm == nullptr || !pm->mel.has_value()) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (!pm->mel->supports_incremental()) {
+            const transcribe::MelConfig & cfg = pm->mel->config();
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "sortformer: push-audio streaming requires an incremental mel frontend "
+                    "(pad_mode=constant, normalize=none, no log_clamp_min; got pad_mode=%s, "
+                    "normalize=%s, log_clamp_min=%g); use transcribe_run for this frontend",
+                    cfg.pad_mode.c_str(), cfg.normalize.c_str(), static_cast<double>(cfg.log_clamp_min));
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    if (stream_params == nullptr || stream_params->family == nullptr) {
+        return TRANSCRIBE_OK;  // NULL ext -> family defaults
+    }
+    transcribe_sortformer_preset preset = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+    return push_preset_from_ext(stream_params, preset);
 }
 
 static transcribe_status push_stream_begin(transcribe_session *             session,
@@ -1361,20 +1394,14 @@ static transcribe_status push_stream_begin(transcribe_session *             sess
     auto * pc = static_cast<SortformerRunSession *>(session);
     auto * pm = static_cast<SortformerModel *>(session->model);
     (void) run_params;
-    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+    if (!push_model_ready(pm)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     // Defense in depth (dispatcher preflight + stream_validate already ran).
     transcribe_sortformer_preset preset = TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
-    if (stream_params != nullptr && stream_params->family != nullptr) {
-        if (const transcribe_status st =
-                transcribe_ext_check(stream_params->family, TRANSCRIBE_EXT_KIND_SORTFORMER_PUSH_STREAM,
-                                     sizeof(struct transcribe_sortformer_push_stream_ext));
-            st != TRANSCRIBE_OK) {
-            return st;
-        }
-        preset = reinterpret_cast<const transcribe_sortformer_push_stream_ext *>(stream_params->family)->preset;
+    if (const transcribe_status st = push_preset_from_ext(stream_params, preset); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     const SortformerStreamParams P   = resolve_stream_params(pm->hparams, preset);
@@ -1411,7 +1438,7 @@ static transcribe_status push_stream_feed(transcribe_session *       session,
                                           transcribe_stream_update * update) {
     auto * pc = static_cast<SortformerRunSession *>(session);
     auto * pm = static_cast<SortformerModel *>(session->model);
-    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+    if (!push_model_ready(pm)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (pc->poll_abort()) {
@@ -1460,7 +1487,7 @@ static transcribe_status push_stream_feed(transcribe_session *       session,
 static transcribe_status push_stream_finalize(transcribe_session * session, transcribe_stream_update * update) {
     auto * pc = static_cast<SortformerRunSession *>(session);
     auto * pm = static_cast<SortformerModel *>(session->model);
-    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+    if (!push_model_ready(pm)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (pc->poll_abort()) {
@@ -1473,24 +1500,9 @@ static transcribe_status push_stream_finalize(transcribe_session * session, tran
     const int64_t real_len = static_cast<int64_t>(ps.total_samples / static_cast<uint64_t>(ps.hop));
     if (feat_len > ps.mel_computed) {
         if (const int64_t real_target = std::min<int64_t>(real_len, feat_len); real_target > ps.mel_computed) {
-            const int          n_new = static_cast<int>(real_target - ps.mel_computed);
-            std::vector<float> frames;
-            int                n_mels_out = 0;
-            if (const transcribe_status st =
-                    pm->mel->compute_frames(ps.pcm.data(), ps.pcm.size(), ps.pcm_start, ps.total_samples,
-                                            ps.mel_computed, n_new, frames, n_mels_out);
-                st != TRANSCRIBE_OK) {
+            if (const transcribe_status st = push_compute_mel(pc, pm, real_target); st != TRANSCRIBE_OK) {
                 return st;
             }
-            const size_t k_old = static_cast<size_t>(ps.mel_computed - ps.mel_start);
-            ps.mel.resize((k_old + static_cast<size_t>(n_new)) * static_cast<size_t>(ps.n_mels));
-            for (int i = 0; i < n_new; ++i) {
-                for (int m = 0; m < ps.n_mels; ++m) {
-                    ps.mel[(k_old + static_cast<size_t>(i)) * static_cast<size_t>(ps.n_mels) + static_cast<size_t>(m)] =
-                        frames[static_cast<size_t>(m) * static_cast<size_t>(n_new) + static_cast<size_t>(i)];
-                }
-            }
-            ps.mel_computed = real_target;
         }
         if (feat_len > ps.mel_computed) {
             // Trailing partial frame(s): the zero mask compute() applies.
@@ -1565,18 +1577,6 @@ static bool accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot
 static int ext_preset_raw(const transcribe_diarize_params * params) {
     return transcribe::enum_field_raw(
         &reinterpret_cast<const transcribe_sortformer_diarize_ext *>(params->family)->preset);
-}
-
-static transcribe_status check_preset(int preset) {
-    switch (preset) {
-        case TRANSCRIBE_SORTFORMER_PRESET_DEFAULT:
-        case TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY:
-        case TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY:
-        case TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY:
-            return TRANSCRIBE_OK;
-        default:
-            return TRANSCRIBE_ERR_INVALID_ARG;
-    }
 }
 
 // ASR-side session factory: the push-audio streaming surface (SFPS) rides
@@ -1697,8 +1697,10 @@ const SortformerRunSession * maybe_push_session(const struct transcribe_session 
     if (session == nullptr || session->model == nullptr || session->model->arch == nullptr) {
         return nullptr;
     }
-    const char * name = session->model->arch->name;
-    if (name == nullptr || std::strcmp(name, "sortformer") != 0) {
+    // This TU defines `arch` (transcribe::sortformer::arch), so the pointer
+    // comparison is exact: no string compare, no false positive from a
+    // different family that merely shares the name.
+    if (session->model->arch != &arch) {
         return nullptr;
     }
     return static_cast<const SortformerRunSession *>(session);
@@ -1718,33 +1720,11 @@ extern "C" int transcribe_sortformer_push_stream_n_tentative(const struct transc
 extern "C" transcribe_status transcribe_sortformer_push_stream_get_tentative(const struct transcribe_session * session,
                                                                              int                               i,
                                                                              struct transcribe_speaker_segment * out) {
-    if (out == nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    // Same minimum-struct rule as transcribe_get_speaker_segment: p is the
-    // last required field (TRANSCRIBE_FIELD_END(transcribe_speaker_segment, p)).
-    constexpr size_t k_min_speaker_segment_size =
-        offsetof(struct transcribe_speaker_segment, p) + sizeof(((struct transcribe_speaker_segment *) 0)->p);
-    if (const auto st = transcribe::check_struct_size(out->struct_size, k_min_speaker_segment_size);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    const uint64_t             caller_size = out->struct_size;
-    transcribe_speaker_segment zero{};
-    zero.struct_size = caller_size;
-    transcribe::copy_out_prefix(out, &zero, caller_size, sizeof(zero));
-
+    // Same staging pattern as transcribe_get_speaker_segment: the shared
+    // helper handles the null check, struct_size rule, zeroed row on
+    // miss, and prefix copy-out.
     const auto * pc = transcribe::sortformer::maybe_push_session(session);
-    if (pc == nullptr || !pc->push.active || i < 0 || static_cast<size_t>(i) >= pc->push.tentative.size()) {
-        return TRANSCRIBE_OK;
-    }
-    const auto &               s = pc->push.tentative[static_cast<size_t>(i)];
-    transcribe_speaker_segment staged{};
-    staged.struct_size = caller_size;
-    staged.t0_ms       = s.t0_ms;
-    staged.t1_ms       = s.t1_ms;
-    staged.speaker_id  = s.speaker_id;
-    staged.p           = s.p;
-    transcribe::copy_out_prefix(out, &staged, caller_size, sizeof(staged));
-    return TRANSCRIBE_OK;
+    const bool   in_range =
+        pc != nullptr && pc->push.active && i >= 0 && static_cast<size_t>(i) < pc->push.tentative.size();
+    return transcribe::copy_out_speaker_segment(in_range ? &pc->push.tentative[static_cast<size_t>(i)] : nullptr, out);
 }
