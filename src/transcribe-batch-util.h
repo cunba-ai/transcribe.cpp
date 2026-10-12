@@ -13,7 +13,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
+#include <string>
+#include <thread>
 #include <vector>
 
 struct ggml_tensor;
@@ -31,6 +34,55 @@ namespace transcribe {
 // stop the other indices (the caller handles partial failure — typically by
 // falling back to the per-utterance path).
 bool parallel_for_all(int n, int n_threads, const std::function<bool(int)> & work);
+
+// Run `fn(tid)` once for every tid in [0, n_threads): tid 0 on the calling
+// thread, the rest on their own threads. Every launched thread is joined on
+// every path, and exceptions reach the caller instead of std::terminate:
+//   - a thread that fails to launch stops further launches, tid 0 is not run,
+//     and the launch error is rethrown once the launched threads have joined;
+//   - otherwise, if any fn(tid) threw, the lowest tid's exception is rethrown
+//     after all threads have joined.
+// n_threads <= 1 runs fn(0) inline. `Thread` is a test seam (fault injection
+// for thread launch); production code uses the default.
+template <typename Thread = std::thread, typename Fn> void run_on_threads(int n_threads, Fn && fn) {
+    if (n_threads <= 1) {
+        fn(0);
+        return;
+    }
+    std::vector<std::exception_ptr> errors(static_cast<size_t>(n_threads));
+    auto                            guarded = [&fn, &errors](int tid) {
+        try {
+            fn(tid);
+        } catch (...) {
+            errors[static_cast<size_t>(tid)] = std::current_exception();
+        }
+    };
+    std::vector<Thread> pool;
+    pool.reserve(static_cast<size_t>(n_threads - 1));
+    std::exception_ptr launch_error;
+    for (int tid = 1; tid < n_threads; ++tid) {
+        try {
+            pool.emplace_back(guarded, tid);
+        } catch (...) {
+            launch_error = std::current_exception();
+            break;
+        }
+    }
+    if (!launch_error) {
+        guarded(0);
+    }
+    for (auto & th : pool) {
+        th.join();
+    }
+    if (launch_error) {
+        std::rethrow_exception(launch_error);
+    }
+    for (const auto & e : errors) {
+        if (e) {
+            std::rethrow_exception(e);
+        }
+    }
+}
 
 // Default CPU thread count for the ggml backends and the host parallel-for
 // when the caller passes n_threads <= 0. Counts the CPUs the process may
@@ -87,13 +139,21 @@ void fill_keypad_mask(ggml_tensor * mask, const std::vector<int> & real_lens, in
 // valid-frame tensors.
 void fill_valid_frame_mask(ggml_tensor * mask, const std::vector<int> & real_lens, int T, int n);
 
+// Progress stage label for the ASR run/batch drivers: "asr+<arch name>"
+// (e.g. "asr+whisper"), or "asr+?" when the arch is unknown. This is the
+// label the batch dispatcher, run_batch_serial, and decode_batch_slices pass
+// to transcribe_session::emit_progress.
+std::string asr_progress_stage(const transcribe_session * session);
+
 // Per-utterance decode loop for the batched-encoder fast path. For each
 // utterance b in [0, n): polls abort, resets the scratch result slot, then
-// calls `decode_fn(b, host_buf + b*utt_elems)`. Each result is snapshotted into
-// session->batch_results with mel/encode timing set to the per-utterance
+// calls `decode_fn(b, host_buf + b*utt_elems)`. Each result is snapshotted
+// into session->batch_results with mel/encode timing set to the per-utterance
 // amortization of the shared encode + total mel cost (so per-utt timings sum to
 // the real batch wall cost); decode_fn's return is the utterance's status.
-// Returns TRANSCRIBE_ERR_ABORTED if abort fires between utterances, else OK.
+// Emits per-utterance progress (see asr_progress_stage; the dispatcher owns
+// the 0/n and n/n bookends) and returns TRANSCRIBE_ERR_ABORTED when abort or
+// a canceling progress callback fires, preserving completed slices.
 transcribe_status decode_batch_slices(transcribe_session * session,
                                       int                  n,
                                       const float *        host_buf,
@@ -110,7 +170,9 @@ transcribe_status decode_batch_slices(transcribe_session * session,
 // result, as it does from transcribe_run; a null pcm or n_samples <= 0 is
 // recorded as INVALID_ARG. session->was_truncated ends true if any utterance
 // truncated or stopped on repetition.
-// Returns TRANSCRIBE_ERR_ABORTED once an utterance aborts, else OK.
+// Emits per-utterance progress (see asr_progress_stage; the dispatcher owns
+// the 0/n and n/n bookends) and returns TRANSCRIBE_ERR_ABORTED once an
+// utterance aborts or the progress callback cancels.
 using RunOneFn = std::function<transcribe_status(const float * pcm, int n_samples)>;
 transcribe_status run_batch_serial(transcribe_session *  session,
                                    const float * const * pcm,

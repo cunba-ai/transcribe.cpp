@@ -54,6 +54,29 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
+# Allowed-backend mask (transcribe_init_backends_ex). The mask is fixed per
+# process, so each scenario is its own test invocation.
+add_executable(transcribe_backend_mask_unit
+    backend_mask_unit.c
+)
+
+set_target_properties(transcribe_backend_mask_unit PROPERTIES
+    C_STANDARD          11
+    C_STANDARD_REQUIRED ON
+    LINKER_LANGUAGE     C
+)
+
+target_link_libraries(transcribe_backend_mask_unit PRIVATE transcribe)
+
+foreach(mode cpu default env-cpu late)
+    add_test(NAME transcribe_backend_mask_unit_${mode}
+        COMMAND transcribe_backend_mask_unit ${mode})
+    set_tests_properties(transcribe_backend_mask_unit_${mode} PROPERTIES
+        ENVIRONMENT "TRANSCRIBE_TEST_BACKEND_DIR=$<TARGET_FILE_DIR:transcribe_backend_mask_unit>")
+endforeach()
+set_tests_properties(transcribe_backend_mask_unit_env-cpu PROPERTIES
+    ENVIRONMENT "TRANSCRIBE_TEST_BACKEND_DIR=$<TARGET_FILE_DIR:transcribe_backend_mask_unit>;TRANSCRIBE_BACKENDS=cpu")
+
 add_test(
     NAME transcribe_extension_umbrella_check
     COMMAND ${CMAKE_COMMAND}
@@ -169,6 +192,31 @@ transcribe_apply_warnings(transcribe_parakeet_chunked_limited_with_rc_mask_unit)
 
 add_test(NAME transcribe_parakeet_chunked_limited_with_rc_mask_unit
     COMMAND transcribe_parakeet_chunked_limited_with_rc_mask_unit)
+
+# Compact offline ChunkedLimited attention mask. Proves that the bounded
+# [window,chunk,n_chunks] representation reconstructs the original dense
+# [T,T] chunk topology and relative-position offsets for ragged geometries.
+
+add_executable(transcribe_parakeet_chunked_limited_window_mask_unit
+    parakeet_chunked_limited_window_mask_unit.cpp)
+
+target_link_libraries(transcribe_parakeet_chunked_limited_window_mask_unit
+    PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_parakeet_chunked_limited_window_mask_unit
+    PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_parakeet_chunked_limited_window_mask_unit)
+
+add_test(NAME transcribe_parakeet_chunked_limited_window_mask_unit
+    COMMAND transcribe_parakeet_chunked_limited_window_mask_unit)
+
+# Long-form pause segmenter vs kestrel-generated expected cut points.
+add_executable(transcribe_parakeet_longform_unit parakeet_longform_unit.cpp)
+target_link_libraries(transcribe_parakeet_longform_unit PRIVATE transcribe ggml)
+target_include_directories(transcribe_parakeet_longform_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+transcribe_apply_warnings(transcribe_parakeet_longform_unit)
+add_test(NAME transcribe_parakeet_longform_unit COMMAND transcribe_parakeet_longform_unit)
 
 # -----------------------------------------------------------------------------
 # Variable-length batch mask and causal subsampling unit test
@@ -319,6 +367,19 @@ add_test(NAME transcribe_run_dispatch_unit
     COMMAND transcribe_run_dispatch_unit)
 
 # -----------------------------------------------------------------------------
+# Dispatcher units against fake arches: roles, host thread pool, non-finite
+# input, throwing stream hooks, DIARIZE and LANGID roles, VAD segmentation
+# -----------------------------------------------------------------------------
+
+foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_segments)
+    add_executable(transcribe_${_t}_unit ${_t}_unit.cpp)
+    target_link_libraries(transcribe_${_t}_unit PRIVATE transcribe)
+    target_include_directories(transcribe_${_t}_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    transcribe_apply_warnings(transcribe_${_t}_unit)
+    add_test(NAME transcribe_${_t}_unit COMMAND transcribe_${_t}_unit)
+endforeach()
+
+# -----------------------------------------------------------------------------
 # Dispatcher-level streaming entry-point behavior
 # -----------------------------------------------------------------------------
 
@@ -355,117 +416,44 @@ add_test(NAME transcribe_log_unit
     COMMAND transcribe_log_unit)
 
 # -----------------------------------------------------------------------------
-# Progress callback contract (setter stores, emit_progress forwards + cancel)
+# Progress callback contract (setter stores, emit_progress forwards + cancel,
+# per-utterance emission in the batch loops)
 # -----------------------------------------------------------------------------
 
-add_executable(transcribe_vad_progress_unit
-    vad_progress_unit.cpp)
+add_executable(transcribe_progress_unit
+    progress_unit.cpp)
 
-target_link_libraries(transcribe_vad_progress_unit PRIVATE transcribe)
+target_link_libraries(transcribe_progress_unit PRIVATE transcribe)
 
-target_include_directories(transcribe_vad_progress_unit PRIVATE
+target_include_directories(transcribe_progress_unit PRIVATE
     ${CMAKE_SOURCE_DIR}/src)
 
-transcribe_apply_warnings(transcribe_vad_progress_unit)
+transcribe_apply_warnings(transcribe_progress_unit)
 
-add_test(NAME transcribe_vad_progress_unit
-    COMMAND transcribe_vad_progress_unit)
-
-# -----------------------------------------------------------------------------
-# VAD struct_size negotiation (backward compat: old callers stay OFF)
-# -----------------------------------------------------------------------------
-
-add_executable(transcribe_vad_params_unit
-    vad_params_unit.cpp)
-
-target_link_libraries(transcribe_vad_params_unit PRIVATE transcribe)
-
-target_include_directories(transcribe_vad_params_unit PRIVATE
-    ${CMAKE_SOURCE_DIR}/src)
-
-transcribe_apply_warnings(transcribe_vad_params_unit)
-
-add_test(NAME transcribe_vad_params_unit
-    COMMAND transcribe_vad_params_unit)
+add_test(NAME transcribe_progress_unit
+    COMMAND transcribe_progress_unit)
 
 # -----------------------------------------------------------------------------
-# audiocpp.dll loader (failure path; success path is local-run integration)
-# Gated: links load_audiocpp_dll which lives in transcribe-vad-audiocpp.cpp
-# (only compiled when TRANSCRIBE_VAD_VIA_AUDIOCPP=ON).
+# Embedded Silero VAD asset: transcribe_model_load_embedded_vad end to end,
+# with NO model file on disk (the bytes live in the library)
 # -----------------------------------------------------------------------------
 
-if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
-    add_executable(transcribe_vad_loader_unit
-        vad_loader_unit.cpp)
+add_executable(transcribe_vad_embedded_unit
+    vad_embedded_unit.cpp)
 
-    target_link_libraries(transcribe_vad_loader_unit PRIVATE transcribe)
+target_link_libraries(transcribe_vad_embedded_unit PRIVATE transcribe)
 
-    target_include_directories(transcribe_vad_loader_unit PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
+# 1 when the library embeds the asset; 0 makes the binary pin the
+# NOT_IMPLEMENTED contract and report skip (77).
+target_compile_definitions(transcribe_vad_embedded_unit PRIVATE
+    TRANSCRIBE_TEST_EMBED_VAD=$<BOOL:${TRANSCRIBE_EMBED_VAD_MODEL_ON}>)
 
-    transcribe_apply_warnings(transcribe_vad_loader_unit)
+transcribe_apply_warnings(transcribe_vad_embedded_unit)
 
-    add_test(NAME transcribe_vad_loader_unit
-        COMMAND transcribe_vad_loader_unit)
-endif()
-
-# -----------------------------------------------------------------------------
-# VAD chunk planner (pure function: merge / split / pad)
-# -----------------------------------------------------------------------------
-
-add_executable(transcribe_vad_plan_unit
-    vad_plan_unit.cpp)
-
-target_link_libraries(transcribe_vad_plan_unit PRIVATE transcribe)
-
-target_include_directories(transcribe_vad_plan_unit PRIVATE
-    ${CMAKE_SOURCE_DIR}/src)
-
-transcribe_apply_warnings(transcribe_vad_plan_unit)
-
-add_test(NAME transcribe_vad_plan_unit
-    COMMAND transcribe_vad_plan_unit)
-
-# -----------------------------------------------------------------------------
-# VAD per-chunk result merge (timestamp offset + cross-index fixup)
-# Gated: links offset_chunk_results/snapshot which live in
-# transcribe-vad-integrate.cpp (only compiled when VAD is on).
-# -----------------------------------------------------------------------------
-
-if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
-    add_executable(transcribe_vad_merge_unit
-        vad_merge_unit.cpp)
-
-    target_link_libraries(transcribe_vad_merge_unit PRIVATE transcribe)
-
-    target_include_directories(transcribe_vad_merge_unit PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    transcribe_apply_warnings(transcribe_vad_merge_unit)
-
-    add_test(NAME transcribe_vad_merge_unit
-        COMMAND transcribe_vad_merge_unit)
-endif()
-
-# -----------------------------------------------------------------------------
-# VAD end-to-end against a real audiocpp.dll (NOT in CI; SKIP_RETURN_CODE 77)
-# -----------------------------------------------------------------------------
-
-if(TRANSCRIBE_VAD_VIA_AUDIOCPP)
-    add_executable(transcribe_vad_integration
-        vad_integration.cpp)
-    # transcribe-common-example provides transcribe_cli::load_wav_mono_16k.
-    target_link_libraries(transcribe_vad_integration
-        PRIVATE transcribe transcribe-common-example)
-    target_include_directories(transcribe_vad_integration PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-    transcribe_apply_warnings(transcribe_vad_integration)
-    add_test(NAME transcribe_vad_integration
-        COMMAND transcribe_vad_integration)
-    # Clean SKIP when the dll / model / fixture is absent (CI has none).
-    set_tests_properties(transcribe_vad_integration PROPERTIES
-        SKIP_RETURN_CODE 77)
-endif()
+add_test(NAME transcribe_vad_embedded_unit
+    COMMAND transcribe_vad_embedded_unit)
+set_tests_properties(transcribe_vad_embedded_unit PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 # -----------------------------------------------------------------------------
 # CPU thread-count helpers (affinity-aware default + sched resolution)
@@ -591,7 +579,13 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_buffered.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_granite5_ctc_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_hop0.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_win_gt_fft.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -835,6 +829,34 @@ if(TRANSCRIBE_UV)
         COMMAND transcribe_granite5_ctc_smoke)
     set_tests_properties(transcribe_granite5_ctc_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
+# ecapa_tdnn (LANGID role) fixture smoke
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_ecapa_tdnn_smoke ecapa_tdnn_smoke.cpp)
+    target_link_libraries(transcribe_ecapa_tdnn_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_ecapa_tdnn_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_ecapa_tdnn_smoke)
+    add_dependencies(transcribe_ecapa_tdnn_smoke fixtures)
+    add_test(NAME transcribe_ecapa_tdnn_smoke COMMAND transcribe_ecapa_tdnn_smoke)
+endif()
+
+# -----------------------------------------------------------------------------
+# silero_vad (VAD role) fixture smoke
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_silero_vad_smoke silero_vad_smoke.cpp)
+    target_link_libraries(transcribe_silero_vad_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_silero_vad_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_silero_vad_smoke)
+    add_dependencies(transcribe_silero_vad_smoke fixtures)
+    add_test(NAME transcribe_silero_vad_smoke COMMAND transcribe_silero_vad_smoke)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1423,24 +1445,53 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_qwen3_asr_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
-    # Sortformer streaming operating-point run ext (SFST, RUN slot).
-    # Kind/slot probe, init stamping, pre-clear rejection with snapshot
-    # preservation, and ext-vs-env preset parity on the committed 2-spk
-    # oracle mix. Gated by TRANSCRIBE_SORTFORMER_GGUF (RC 77 skip).
-    add_executable(transcribe_sortformer_stream_ext_unit
-        sortformer_stream_ext_unit.cpp)
-
-    target_link_libraries(transcribe_sortformer_stream_ext_unit
+    # Sortformer on the DIARIZE role: golden segments per preset and pre-clear
+    # rejection.
+    # Gated by TRANSCRIBE_SORTFORMER_GGUF (RC 77 skip).
+    add_executable(transcribe_sortformer_diarize_unit
+        sortformer_diarize_unit.cpp)
+    target_link_libraries(transcribe_sortformer_diarize_unit
         PRIVATE transcribe transcribe-common-example)
-
-    target_compile_definitions(transcribe_sortformer_stream_ext_unit PRIVATE
+    target_include_directories(transcribe_sortformer_diarize_unit PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})  # tests/diar_rows.h row fixtures
+    target_compile_definitions(transcribe_sortformer_diarize_unit PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+    transcribe_apply_warnings(transcribe_sortformer_diarize_unit)
+    add_test(NAME transcribe_sortformer_diarize_unit
+        COMMAND transcribe_sortformer_diarize_unit)
+    set_tests_properties(transcribe_sortformer_diarize_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
 
-    transcribe_apply_warnings(transcribe_sortformer_stream_ext_unit)
+    # ecapa_tdnn on the LANGID role: label table, aliases, top-1 on the
+    # committed FLEURS clips, the 30 s crop, and the GPU graph against the
+    # CPU logits when a GPU backend loads. Gated by
+    # TRANSCRIBE_ECAPA_TDNN_GGUF (RC 77 skip).
+    add_executable(transcribe_ecapa_tdnn_real_smoke
+        ecapa_tdnn_real_smoke.cpp)
+    target_link_libraries(transcribe_ecapa_tdnn_real_smoke
+        PRIVATE transcribe transcribe-common-example ggml)
+    target_compile_definitions(transcribe_ecapa_tdnn_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+    transcribe_apply_warnings(transcribe_ecapa_tdnn_real_smoke)
+    add_test(NAME transcribe_ecapa_tdnn_real_smoke
+        COMMAND transcribe_ecapa_tdnn_real_smoke)
+    set_tests_properties(transcribe_ecapa_tdnn_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
 
-    add_test(NAME transcribe_sortformer_stream_ext_unit
-        COMMAND transcribe_sortformer_stream_ext_unit)
-    set_tests_properties(transcribe_sortformer_stream_ext_unit PROPERTIES
+    # silero_vad on the VAD role: reference segments of jfk.wav, no speech
+    # in noise.wav and 20 ms streaming parity, on the CPU at 1 and 4
+    # threads. Gated by TRANSCRIBE_SILERO_VAD_GGUF / _V5_BIN / _V6_BIN
+    # (RC 77 skip).
+    add_executable(transcribe_silero_vad_real_smoke
+        silero_vad_real_smoke.cpp)
+    target_link_libraries(transcribe_silero_vad_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+    target_compile_definitions(transcribe_silero_vad_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+    transcribe_apply_warnings(transcribe_silero_vad_real_smoke)
+    add_test(NAME transcribe_silero_vad_real_smoke
+        COMMAND transcribe_silero_vad_real_smoke)
+    set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
     # Sortformer push-audio streaming session (SFPS, STREAM slot).
@@ -1453,6 +1504,9 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 
     target_link_libraries(transcribe_sortformer_push_stream_unit
         PRIVATE transcribe transcribe-common-example)
+
+    target_include_directories(transcribe_sortformer_push_stream_unit PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})  # tests/diar_rows.h row fixtures
 
     target_compile_definitions(transcribe_sortformer_push_stream_unit PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
@@ -1474,6 +1528,9 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 
     target_link_libraries(transcribe_sortformer_push_stream_long
         PRIVATE transcribe transcribe-common-example)
+
+    target_include_directories(transcribe_sortformer_push_stream_long PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})  # tests/diar_rows.h row fixtures
 
     transcribe_apply_warnings(transcribe_sortformer_push_stream_long)
 
@@ -1660,4 +1717,23 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
             -DCLI=$<TARGET_FILE:transcribe-cli>
             -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_device_arg_smoke.cmake)
+
+    add_test(NAME transcribe_cli_diarize_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/sortformer-2spk-mix.wav
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-diarize-smoke
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_diarize_smoke.cmake)
+    set_tests_properties(transcribe_cli_diarize_smoke PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIP:")
+
+    if(TRANSCRIBE_UV)
+        add_test(NAME transcribe_cli_langid_smoke
+            COMMAND ${CMAKE_COMMAND}
+                -DCLI=$<TARGET_FILE:transcribe-cli>
+                -DMODEL=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_minimal.gguf
+                -DWAV=${CMAKE_SOURCE_DIR}/samples/fleurs-en.wav
+                -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-langid-smoke
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_langid_smoke.cmake)
+    endif()
 endif()

@@ -14,12 +14,28 @@ use std::sync::Once;
 /// in compiled-in (static / plain `shared`) builds; in a `dynamic-backends`
 /// build it loads the per-ISA CPU / GPU modules the native build installed —
 /// without it a model load in that posture finds zero devices. Folded into the
-/// fixture resolvers below so every model-gated test gets it for free.
-fn ensure_backends() {
+/// fixture resolvers below so every model-gated test gets it for free;
+/// fixture-less tests (e.g. the embedded VAD) call it directly.
+pub fn ensure_backends() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         transcribe_cpp::init_backends_default().expect("init_backends_default");
     });
+}
+
+/// True when the native library is usable for model loads. In a `dynload`
+/// build without a loaded library the trampolines return type-shaped errors
+/// through a null table, which is indistinguishable from a real failure —
+/// model-gated tests skip instead (see tests/vad_embedded.rs).
+pub fn library_loaded() -> bool {
+    #[cfg(feature = "dynload")]
+    {
+        transcribe_cpp::is_dynamic_loaded()
+    }
+    #[cfg(not(feature = "dynload"))]
+    {
+        true
+    }
 }
 
 /// Repo root: walk up from this crate until we find the marker that only the
@@ -111,6 +127,73 @@ pub fn smoke_itn_model() -> Option<PathBuf> {
     )
 }
 
+/// Sortformer diarizer (DIARIZE + stream-session ASR role) plus its
+/// two-speaker sample, or `None` (with a skip note) when either is absent.
+/// Composed from [`smoke_sortformer_model`] + [`smoke_diar_audio`] so the
+/// one audio env contract (`TRANSCRIBE_SMOKE_DIAR_AUDIO`) covers every
+/// sortformer test; set `TRANSCRIBE_SMOKE_SORTFORMER_MODEL` to point the
+/// model anywhere (e.g. a copy under a consumer's models dir).
+pub fn smoke_sortformer_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
+    if !library_loaded() {
+        eprintln!("skip {test}: native library not loaded (dynload posture)");
+        return None;
+    }
+    match (smoke_sortformer_model(), smoke_diar_audio()) {
+        (Some(m), Some(a)) => Some((m, a)),
+        _ => {
+            eprintln!(
+                "skip {test}: sortformer model/audio absent (set TRANSCRIBE_SMOKE_SORTFORMER_MODEL / \
+                 TRANSCRIBE_SMOKE_DIAR_AUDIO)"
+            );
+            None
+        }
+    }
+}
+
+/// VoxLingua107 ECAPA-TDNN (LANGID role only), or `None` (with a skip note).
+pub fn smoke_langid_model(test: &str) -> Option<PathBuf> {
+    let model = family_model(
+        "TRANSCRIBE_SMOKE_LANGID_MODEL",
+        "models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-Q8_0.gguf",
+    );
+    if model.is_none() {
+        eprintln!("skip {test}: langid model absent (set TRANSCRIBE_SMOKE_LANGID_MODEL)");
+    }
+    model
+}
+
+/// The toy ecapa_tdnn GGUF the C++ build generates under tests/fixtures/
+/// (5 labels aa..ee, alias xx=aa, random weights), or `None` (with a skip
+/// note) before the C++ test fixtures have been built.
+pub fn langid_toy_model(test: &str) -> Option<PathBuf> {
+    ensure_backends();
+    let path = repo_root().join("tests/fixtures/arch_ecapa_tdnn_minimal.gguf");
+    if !path.is_file() {
+        eprintln!(
+            "skip {test}: {} absent (build the C++ `fixtures` target)",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
+
+/// The toy silero_vad GGUF the C++ build generates under tests/fixtures/
+/// (random weights, 512-sample frames), or `None` (with a skip note) before
+/// the C++ test fixtures have been built.
+pub fn vad_toy_model(test: &str) -> Option<PathBuf> {
+    ensure_backends();
+    let path = repo_root().join("tests/fixtures/arch_silero_vad.gguf");
+    if !path.is_file() {
+        eprintln!(
+            "skip {test}: {} absent (build the C++ `fixtures` target)",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
+
 /// Both fixtures together; prints a skip note and returns `None` if either is
 /// missing (so the caller can `return` early — the Rust equivalent of skip).
 pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
@@ -125,7 +208,7 @@ pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
     }
 }
 
-fn load_wav(path: &std::path::Path) -> Vec<f32> {
+pub fn load_wav(path: &std::path::Path) -> Vec<f32> {
     let mut reader = hound::WavReader::open(path).expect("open wav");
     let spec = reader.spec();
     assert_eq!(spec.channels, 1, "{path:?} must be mono");
@@ -138,7 +221,11 @@ fn load_wav(path: &std::path::Path) -> Vec<f32> {
 }
 
 /// Sortformer diarizer (accepts SORTFORMER_PUSH_STREAM on the stream slot).
+/// Skips in the dynload posture until the native library is loaded.
 pub fn smoke_sortformer_model() -> Option<PathBuf> {
+    if !library_loaded() {
+        return None;
+    }
     family_model(
         "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
         "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf",

@@ -26,37 +26,7 @@ gguf_context * Loader::release_gguf() {
     return out;
 }
 
-transcribe_status Loader::open(const char * path) {
-    if (path == nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-
-    path_ = path;
-
-    // Distinguishes "the file is not at this path" (-> FILE_NOT_FOUND)
-    // from every other reason gguf_init_from_file might return nullptr
-    // (-> ERR_GGUF). Exact semantics in transcribe-path.h.
-    if (!path_is_present(path)) {
-        return TRANSCRIBE_ERR_FILE_NOT_FOUND;
-    }
-
-    // Header-only inspection: do not allocate ggml tensors. With ctx=null
-    // gguf_init_from_file skips the entire tensor-allocation block; with
-    // no_alloc=true any future code path that does pass a ctx will not
-    // read the data blob.
-    gguf_init_params init_params{};
-    init_params.no_alloc = true;
-    init_params.ctx      = nullptr;
-
-    gguf_ = gguf_init_from_file(path, init_params);
-    if (gguf_ == nullptr) {
-        // ggml has already logged a structured error via GGML_LOG_ERROR
-        // (corrupt magic, version mismatch, truncated header, IO error
-        // after the existence check, etc.). All of those collapse to a
-        // single public status.
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
+transcribe_status Loader::read_ident() {
     // general.architecture is required. Without it the dispatch layer
     // has nothing to look up in the registry. Both Absent and BadType
     // are fatal: a missing arch and an arch with the wrong GGUF type
@@ -97,6 +67,69 @@ transcribe_status Loader::open(const char * path) {
         meta_.emplace(gguf_get_key(gguf_, i), gguf_get_val_str(gguf_, i));
     }
 
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status Loader::open(const char * path) {
+    if (path == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    path_ = path;
+
+    // Distinguishes "the file is not at this path" (-> FILE_NOT_FOUND)
+    // from every other reason gguf_init_from_file might return nullptr
+    // (-> ERR_GGUF). Exact semantics in transcribe-path.h.
+    if (!path_is_present(path)) {
+        return TRANSCRIBE_ERR_FILE_NOT_FOUND;
+    }
+
+    // Header-only inspection: do not allocate ggml tensors. With ctx=null
+    // gguf_init_from_file skips the entire tensor-allocation block; with
+    // no_alloc=true any future code path that does pass a ctx will not
+    // read the data blob.
+    gguf_init_params init_params{};
+    init_params.no_alloc = true;
+    init_params.ctx      = nullptr;
+
+    gguf_ = gguf_init_from_file(path, init_params);
+    if (gguf_ == nullptr) {
+        // ggml has already logged a structured error via GGML_LOG_ERROR
+        // (corrupt magic, version mismatch, truncated header, IO error
+        // after the existence check, etc.). All of those collapse to
+        // a single public status.
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    return read_ident();
+}
+
+transcribe_status Loader::adopt(gguf_context * gguf, const void * data, size_t size) {
+    if (gguf == nullptr || data == nullptr || size == 0) {
+        // The context was not adopted, so its lifetime stays with the
+        // caller — but a null ctx has nothing to free anyway, and a
+        // non-null ctx with a null buffer is a caller bug we refuse
+        // before taking ownership.
+        if (gguf != nullptr && (data == nullptr || size == 0)) {
+            gguf_free(gguf);
+        }
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Take ownership first so read_ident() failures unwind through our
+    // destructor (which frees the context) — the caller must not double-
+    // free. Reset the recorded buffer on failure so is-memory queries
+    // cannot dangle past a failed adopt.
+    gguf_     = gguf;
+    mem_data_ = data;
+    mem_size_ = size;
+    if (const transcribe_status st = read_ident(); st != TRANSCRIBE_OK) {
+        gguf_free(gguf_);
+        gguf_     = nullptr;
+        mem_data_ = nullptr;
+        mem_size_ = 0;
+        return st;
+    }
     return TRANSCRIBE_OK;
 }
 

@@ -103,6 +103,28 @@ transcribe_status stream_tensor_data(const std::string &  path,
                                      ggml_context *       ctx_meta,
                                      const char *         error_tag);
 
+// In-memory twin of stream_tensor_data: copy every tensor in `ctx_meta`
+// from a GGUF byte buffer (as recorded by Loader::adopt, typically an
+// embedded asset) into its already-allocated backend buffer slot. The
+// buffer must be exactly the GGUF the gguf_data context was parsed from;
+// `base_size` bounds every offset before the copy.
+//
+//   base:      start of the whole GGUF buffer (offset 0 = first header
+//              byte; same coordinate system as gguf_get_data_offset).
+//   base_size: total buffer size in bytes.
+//   gguf_data: gguf_context from gguf_init_from_buffer over the same
+//              buffer with no_alloc=true. Resolves each tensor's offset.
+//   ctx_meta:  tensors with backend-bound data slots, as above.
+//   error_tag: log prefix for diagnostics.
+//
+// Returns TRANSCRIBE_OK on success, TRANSCRIBE_ERR_GGUF on any
+// out-of-bounds offset or tensor-not-found failure.
+transcribe_status stream_tensor_data_from_memory(const void *         base,
+                                                 size_t               base_size,
+                                                 const gguf_context * gguf_data,
+                                                 ggml_context *       ctx_meta,
+                                                 const char *         error_tag);
+
 // A single F16 → F32 promotion target: `dst_slot` is a pointer into a
 // family weights struct (e.g. &block.conv_pw1_w) that currently holds
 // the F16 source tensor and will be repointed to the F32 replacement.

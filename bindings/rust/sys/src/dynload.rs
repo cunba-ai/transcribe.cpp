@@ -42,7 +42,12 @@ static SLOTS: OnceLock<Box<[AtomicPtr<()>]>> = OnceLock::new();
 fn default_names() -> &'static [&'static str] {
     #[cfg(target_os = "windows")]
     {
-        &["transcribe.dll"]
+        // MSVC-target CMake names the shared library `transcribe.dll`; a
+        // MinGW toolchain prefixes it to `libtranscribe.dll`. Try both so a
+        // mingw-built library is discoverable by the default search (an
+        // explicit `init_dynamic(path)` always wins for consumers that pin
+        // the exact file).
+        &["transcribe.dll", "libtranscribe.dll"]
     }
     #[cfg(target_os = "macos")]
     {

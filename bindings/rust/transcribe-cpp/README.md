@@ -76,6 +76,66 @@ let transcript = stream.snapshot(); // language, segments, words, tokens, timing
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+### Diarization (who spoke when)
+
+A model whose `roles()` contain `Role::Diarize` (e.g. Sortformer) opens a
+`DiarizeSession` that returns speaker turns; calls for a role the model lacks
+return `Error::UnsupportedRole`.
+
+```rust
+use transcribe_cpp::{DiarizeOptions, Model, Role};
+let model = Model::load("diarizer.gguf")?;
+assert!(model.roles().contains(Role::Diarize));
+let mut diarize = model.diarize_session()?;
+for turn in diarize.run(&pcm, &DiarizeOptions::default())? {
+    println!("speaker {}: {}..{} ms", turn.speaker_id, turn.t0_ms, turn.t1_ms);
+}
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+### Language ID
+
+A model whose `roles()` contain `Role::LangId` (VoxLingua107 ECAPA-TDNN)
+opens a `LangIdSession`. Codes are the model's own labels; match them against
+an ASR model's `capabilities().languages` yourself. `allowed: None` scores
+every label, `Some(vec![])` is `Error::InvalidArgument`, and clips under
+`langid_info()?.min_audio_ms` are `Error::InputTooShort`. A low
+`allowed_mass` means the speech is probably outside the allowed set.
+
+```rust
+use transcribe_cpp::{LangIdOptions, Model};
+let model = Model::load("lang-id-voxlingua107-ecapa-Q8_0.gguf")?;
+let mut lid = model.langid_session()?;
+let opts = LangIdOptions { allowed: Some(vec!["en".into(), "de".into()]) };
+let result = lid.run(&pcm, &opts)?;
+println!("{:?} (mass {})", result.code(), result.allowed_mass);
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+### Voice activity detection
+
+A model whose `roles()` contain `Role::Vad` (Silero VAD; GGUF or the
+whisper.cpp `ggml-silero-v5.1.2.bin` / `v6.2.0.bin`) opens a `VadSession`.
+`run` scores a clip and returns per-frame probabilities
+(`vad_info()?.frame_samples` samples each) plus speech segments in samples;
+`stream_feed` / `stream_flush` return the probabilities of the frames each call
+completed.
+
+```rust
+use transcribe_cpp::{Model, VadOptions};
+let model = Model::load("silero-vad-v6.2-F32.gguf")?;
+let mut vad = model.vad_session()?;
+for s in vad.run(&pcm, &VadOptions::default())?.segments {
+    println!("speech {}..{}", s.start_sample, s.end_sample);
+}
+for chunk in pcm.chunks(320) {
+    let r = vad.stream_feed(chunk)?;
+    println!("frames {}.. {:?}", r.first_frame, r.probs);
+}
+vad.stream_flush()?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh
@@ -109,9 +169,10 @@ README if you need runtime-loaded backend modules or custom
 
 `devices()` returns process-local `Device` handles. Leave
 `ModelOptions::device` as `None` for the backend's automatic policy, or pass
-`Some(device)` to select that exact primary device with no fallback. Persist
-`device_id` and resolve a fresh handle after backend initialization; registry
-indices and handles are not stable across processes. In dynamic-backend builds,
+`Some(device)` to select that exact primary device with no fallback. Handles
+are not stable across processes; persist `device_id` when it is `Some`,
+otherwise `kind` + `name` + `description` (e.g. Metal), and later re-find the
+device in `devices()` after backend initialization. In dynamic-backend builds,
 finish `init_backends()` or `init_backends_default()` before any thread
 enumerates devices, queries backend availability, or loads a model; native
 registry mutation is a startup-only operation and must not race those calls.
@@ -197,6 +258,7 @@ fn main() {
 - `Session` is `Send` but not `Sync`; mutating calls take `&mut self`.
 - In 0.x the C library allows at most one in-flight run across all sessions of a
   model; this crate enforces it with a per-model mutex, so concurrent calls
-  queue rather than race. For real parallelism, use one `Model` per worker.
+  queue rather than race. `DiarizeSession`s share the same lock. For real
+  parallelism, use one `Model` per worker.
 
 - License: MIT

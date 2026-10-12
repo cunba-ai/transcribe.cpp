@@ -193,15 +193,6 @@ option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linu
 option(TRANSCRIBE_HIP            "Enable HIP/ROCm backend"  OFF)  # opt-in; Linux + ROCm 6.1+
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
-# Compile VAD glue that dynamically loads audiocpp.dll at runtime. The VAD
-# field in transcribe_run_params always exists (parsed as OFF when off); this
-# switch controls whether the audiocpp-backed implementation is compiled in.
-# On by default so a clean reconfigure (e.g. `rm CMakeCache.txt`) does not
-# silently drop VAD. The audiocpp-backed glue is loaded dynamically so there
-# is still zero compile-time dependency on audiocpp; the user must still
-# supply audiocpp.dll at runtime for the symbols to actually resolve.
-option(TRANSCRIBE_VAD_VIA_AUDIOCPP "Compile VAD glue (dynamic audiocpp.dll load)" ON)
-
 # Library link mode and wheel-hygiene switches.
 #
 # TRANSCRIBE_BUILD_SHARED OFF (default) builds a static libtranscribe + static
@@ -313,6 +304,12 @@ configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/transcribe-build-info.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/transcribe-build-info.h"
     @ONLY)
+
+# Embedded Silero VAD asset (TRANSCRIBE_EMBED_VAD_MODEL): resolves the VAD
+# GGUF (explicit file or configure-time download) and generates the byte-
+# array source consumed by the transcribe target. Sets TRANSCRIBE_VAD_EMBEDDED_CPP
+# and TRANSCRIBE_EMBED_VAD_MODEL_ON for src/CMakeLists.txt; no-ops when OFF.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/TranscribeEmbedVad.cmake")
 
 message(STATUS "transcribe version: ${TRANSCRIBE_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT}, branch ${TRANSCRIBE_BUILD_BRANCH}, built ${TRANSCRIBE_BUILD_DATE}, backend ${TRANSCRIBE_BUILD_BACKEND})")
 
@@ -429,6 +426,15 @@ if(TRANSCRIBE_X86_CONSERVATIVE)
             set(${_simd_flag} OFF CACHE BOOL "")
         endif()
     endforeach()
+endif()
+
+# Apple Silicon defaults GGML_NATIVE to OFF, the posture of the macOS wheel,
+# the XCFramework and the Rust crate. Native tuning on an M2 or newer turns on
+# i8mm, and ggml compiles tinyBLAS out under __ARM_FEATURE_MATMUL_INT8, so a
+# native build runs F32 / F16 / Q8_0 CPU inference 1.2-2.1x slower (#194).
+# A default, not a clamp: -DGGML_NATIVE=ON still wins.
+if(TRANSCRIBE_IS_APPLE_SILICON AND NOT DEFINED CACHE{GGML_NATIVE})
+    set(GGML_NATIVE OFF CACHE BOOL "")
 endif()
 
 # OpenMP — CENTRAL POLICY.

@@ -6,6 +6,9 @@
 
 #include "transcribe-arch.h"
 
+#include "transcribe-log.h"
+#include "transcribe-model.h"
+
 #include <cstring>
 
 namespace transcribe {
@@ -87,6 +90,14 @@ namespace sortformer {
 extern const Arch arch;
 }
 
+namespace ecapa_tdnn {
+extern const Arch arch;
+}
+
+namespace silero_vad {
+extern const Arch arch;
+}
+
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
         return nullptr;
@@ -96,7 +107,8 @@ const Arch * find_arch(const char * name) {
         &parakeet::arch,         &cohere::arch,      &canary::arch,     &qwen3_asr::arch,    &voxtral::arch,
         &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch,    &moonshine::arch,    &moonshine_streaming::arch,
         &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,     &granite::arch,      &granite_nar::arch,
-        &medasr::arch,           &moss::arch,        &sortformer::arch, &granite5_ctc::arch,
+        &medasr::arch,           &moss::arch,        &sortformer::arch, &granite5_ctc::arch, &ecapa_tdnn::arch,
+        &silero_vad::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 
@@ -110,6 +122,51 @@ const Arch * find_arch(const char * name) {
         }
     }
     return nullptr;
+}
+
+transcribe_status resolve_roles(transcribe_model * model) {
+    if (model == nullptr || model->arch == nullptr) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    const Arch & arch        = *model->arch;
+    const char * name        = arch.name != nullptr ? arch.name : "(unknown)";
+    // The ASR session surface needs init_context plus at least one of the
+    // one-shot run path or the full streaming hook trio. A stream-only arch
+    // (sortformer's push-audio diarizer: run/run_batch null, stream hooks
+    // present) legitimately serves the ASR session; transcribe_run on it
+    // returns NOT_IMPLEMENTED at the dispatcher's run-hook check.
+    const bool   has_asr     = arch.init_context != nullptr &&
+                               (arch.run != nullptr || (arch.stream_begin != nullptr && arch.stream_feed != nullptr &&
+                                                        arch.stream_finalize != nullptr));
+    const bool   has_diarize = arch.diarize != nullptr;
+    const bool   has_langid  = arch.langid != nullptr;
+    const bool   has_vad     = arch.vad != nullptr;
+
+    if (model->roles == 0 && has_asr) {
+        model->roles = TRANSCRIBE_ROLE_ASR;
+    }
+
+    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_LANGID | TRANSCRIBE_ROLE_VAD;
+    const char *   why   = nullptr;
+    if (model->roles == 0) {
+        why = "serves no role";
+    } else if ((model->roles & ~known) != 0) {
+        why = "sets an unknown role bit";
+    } else if ((model->roles & TRANSCRIBE_ROLE_ASR) != 0 && !has_asr) {
+        why = "sets the ASR role without init_context / run or stream hooks";
+    } else if ((model->roles & TRANSCRIBE_ROLE_DIARIZE) != 0 && !has_diarize) {
+        why = "sets the DIARIZE role without a diarize ops table";
+    } else if ((model->roles & TRANSCRIBE_ROLE_LANGID) != 0 && !has_langid) {
+        why = "sets the LANGID role without a langid ops table";
+    } else if ((model->roles & TRANSCRIBE_ROLE_VAD) != 0 && !has_vad) {
+        why = "sets the VAD role without a vad ops table";
+    }
+    if (why != nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: arch '%s' %s (roles 0x%x)", name, why,
+                static_cast<unsigned>(model->roles));
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    return TRANSCRIBE_OK;
 }
 
 }  // namespace transcribe

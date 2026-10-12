@@ -1,11 +1,14 @@
 //! Progress reporting for in-flight runs.
 //!
-//! Install a [`ProgressCallback`] on a session to receive chunk-level progress
-//! during `run` (VAD chunk loop today; per-family internals in a future phase).
+//! Install a [`ProgressCallback`] on a session to receive utterance-boundary
+//! progress during offline `run` / `run_batch`: a single `run` emits a final
+//! `1/1` on success, while `run_batch` emits the `0/n` and `n/n` bookends plus
+//! one `(i+1, n)` per completed utterance from the shared serial/slice loops.
 //! The callback receives a completion fraction, a stage label, and completed /
-//! total chunk counts; returning `ProgressAction::Cancel` aborts the run at the
-//! next chunk boundary (the call then returns [`crate::Error::Aborted`] with
-//! the partial transcript, mirroring [`crate::CancelToken`]).
+//! total utterance counts; returning `ProgressAction::Cancel` aborts the run
+//! at the next utterance boundary (the call then returns
+//! [`crate::Error::Aborted`] with the partial transcript, mirroring
+//! [`crate::CancelToken`]).
 //!
 //! Semantics match the C `transcribe_progress_callback` (and audio.cpp's
 //! `audiocpp_progress_fn`): non-zero return cancels. Streaming runs
@@ -27,7 +30,7 @@ use std::sync::{Arc, Mutex};
 pub enum ProgressAction {
     /// Continue the run.
     Continue,
-    /// Abort at the next chunk boundary; partial transcript is preserved and
+    /// Abort at the next utterance boundary; partial transcript is preserved and
     /// the run returns [`crate::Error::Aborted`].
     Cancel,
 }
@@ -50,9 +53,9 @@ pub struct Progress {
     /// Short stage label valid for the duration of the call (e.g. `"asr+whisper"`).
     /// Copied to an owned `String` so the callback can outlive the C pointer.
     pub stage: String,
-    /// Chunks completed so far (`0..=total`).
+    /// Utterances completed so far (`0..=total`).
     pub completed: i64,
-    /// Total chunks (>= 1).
+    /// Total utterances (>= 1).
     pub total: i64,
 }
 
@@ -95,7 +98,7 @@ impl ProgressCallback {
 /// The C progress trampoline. `user_data` is the `*const Mutex<Box<ProgressFn>>`
 /// pointee of the `Arc` the session retains (installed via `Arc::as_ptr`, which
 /// yields a pointer to the Arc's *inner* data, not to the Arc handle). Invoked
-/// on the run thread between chunks.
+/// on the run thread at utterance boundaries.
 ///
 /// # SAFETY contract
 ///
@@ -123,7 +126,9 @@ pub(crate) extern "C" fn progress_trampoline(
         String::new()
     } else {
         // SAFETY: C side documents the pointer as a valid UTF-8 CStr for the
-        // duration of the call (the library's own stage strings are literals).
+        // duration of the call — the library's stage strings are per-call heap
+        // strings (built by asr_progress_stage), not static literals, so the
+        // snapshot copies them into an owned String below.
         unsafe { CStr::from_ptr(stage) }.to_string_lossy().into_owned()
     };
     let snapshot = Progress {

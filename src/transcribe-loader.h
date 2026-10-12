@@ -54,24 +54,48 @@ class Loader {
     //                                  / wrong type.
     transcribe_status open(const char * path);
 
-    // Identification fields, populated on a successful open(). The arch
-    // string is required by the GGUF schema we accept; the variant string
-    // is optional and may be empty for older or partial files.
+    // Adopt a gguf_context the caller created over an in-memory GGUF
+    // (gguf_init_from_buffer) and read the same identification fields
+    // open() does. The Loader takes ownership of `gguf`; on every non-OK
+    // return the context is freed and not adopted.
+    //
+    // `data` / `size` record the backing buffer so a per-family load() can
+    // re-open the SAME bytes for tensor data instead of a path; the buffer
+    // must outlive the Loader (the embedded-asset case is static storage).
+    // Keep them consistent with the context: they are only read together.
+    //
+    // Returns:
+    //   TRANSCRIBE_OK               on success.
+    //   TRANSCRIBE_ERR_INVALID_ARG  if gguf or data is null / size is 0.
+    //   TRANSCRIBE_ERR_GGUF         if the required general.architecture KV
+    //                               is missing / wrong type, or stt.variant
+    //                               has the wrong type (same rules as open).
+    transcribe_status adopt(gguf_context * gguf, const void * data, size_t size);
+
+    // Identification fields, populated on a successful open() or adopt().
+    // The arch string is required by the GGUF schema we accept; the variant
+    // string is optional and may be empty for older or partial files. The
+    // path stays empty for an adopted (in-memory) loader.
     const std::string & path() const { return path_; }
 
     const std::string & arch() const { return arch_; }
 
     const std::string & variant() const { return variant_; }
 
-    // All scalar-string metadata KVs read on open(), keyed by GGUF key.
-    // Copied onto the model after dispatch and surfaced publicly via
-    // transcribe_model_meta_val_str(). Never affects dispatch.
+    // All scalar-string metadata KVs read on open() or adopt(), keyed by
+    // GGUF key. Copied onto the model after dispatch and surfaced publicly
+    // via transcribe_model_meta_val_str(). Never affects dispatch.
     const MetaMap & meta() const { return meta_; }
 
     // Borrowed pointer to the underlying gguf_context. Valid until the
     // Loader is destroyed or release_gguf() is called. Returns nullptr
-    // before a successful open().
+    // before a successful open() / adopt().
     gguf_context * gguf() const { return gguf_; }
+
+    // The in-memory backing recorded by adopt(), or null for a file loader.
+    const void * mem_data() const { return mem_data_; }
+
+    size_t mem_size() const { return mem_size_; }
 
     // Hand the gguf_context off to the per-arch handler. After this call
     // the Loader no longer owns the context and the caller must
@@ -79,11 +103,19 @@ class Loader {
     gguf_context * release_gguf();
 
   private:
+    // Read arch / variant / scalar-string metadata from gguf_. Shared tail
+    // of open() and adopt(). Returns TRANSCRIBE_ERR_GGUF on a missing or
+    // wrong-typed general.architecture (required) or a wrong-typed
+    // stt.variant (optional key, BadType still fatal — see open()).
+    transcribe_status read_ident();
+
     std::string    path_;
     std::string    arch_;
     std::string    variant_;
     MetaMap        meta_;
-    gguf_context * gguf_ = nullptr;
+    gguf_context * gguf_     = nullptr;
+    const void *   mem_data_ = nullptr;
+    size_t         mem_size_ = 0;
 };
 
 }  // namespace transcribe

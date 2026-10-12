@@ -364,7 +364,9 @@ fn not_loaded_default(ret: &str) -> &'static str {
     match ret {
         "()" => "()",
         "bool" => "false",
-        "usize" => "0",
+        "f32" => "0.0",
+        "f64" => "0.0",
+        "u16" | "u32" | "u64" | "usize" | "i16" | "i32" | "i64" => "0",
         "::std::os::raw::c_int" => "-1",
         "transcribe_status" => "transcribe_status(8)", // TRANSCRIBE_ERR_BACKEND
         // Opaque device-handle typedef: null is both the not-loaded default

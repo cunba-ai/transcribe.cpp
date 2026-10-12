@@ -140,6 +140,17 @@ void build_hann_window_symmetric_padded(int win_length, int n_fft, bool periodic
     }
 }
 
+// Periodic Hamming of length win_length, zero-padded to n_fft on both
+// sides: torch.hamming_window(N) with the default periodic=True,
+// 0.54 - 0.46*cos(2πk/N). SpeechBrain (ecapa_tdnn).
+void build_hamming_window_periodic_padded(int win_length, int n_fft, std::vector<double> & out) {
+    out.assign(n_fft, 0.0);
+    const int pad_each = (n_fft - win_length) / 2;
+    for (int k = 0; k < win_length; ++k) {
+        out[pad_each + k] = 0.54 - 0.46 * std::cos(2.0 * M_PI * k / static_cast<double>(win_length));
+    }
+}
+
 // In-place radix-2 Cooley-Tukey FFT, fp64. Operates on n complex
 // numbers stored as interleaved (re, im, re, im, ...). n must be a
 // power of 2. For n=512 (Parakeet) this is ~80 lines and runs in
@@ -269,6 +280,22 @@ void fft_radix2(double * data, int n) {
     }
 }
 
+#ifdef __APPLE__
+// Destroys a vDSP FFT setup on every exit, including a worker exception
+// rethrown by run_on_threads. Shared by compute() (one setup per call,
+// shared across threads) and compute_frames() (one setup per call; null —
+// a no-op — when the non-pow2 path does not need one).
+struct FftSetupGuard {
+    FFTSetupD setup = nullptr;
+
+    ~FftSetupGuard() {
+        if (setup != nullptr) {
+            vDSP_destroy_fftsetupD(setup);
+        }
+    }
+};
+#endif
+
 }  // namespace
 
 // ---------- MelFrontend ----------
@@ -289,6 +316,8 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
         for (int i = 0; i < cfg.win_length && i < static_cast<int>(cfg.window.size()); ++i) {
             window_[left_pad + i] = static_cast<double>(cfg.window[i]);
         }
+    } else if (cfg.window_type == "hamming_periodic") {
+        build_hamming_window_periodic_padded(cfg.win_length, cfg.n_fft, window_);
     } else {
         const bool periodic = (cfg.window_type == "hann_periodic");
         build_hann_window_symmetric_padded(cfg.win_length, cfg.n_fft, periodic, window_);
@@ -300,6 +329,25 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
     } else {
         build_mel_filterbank_slaney(cfg.sample_rate, cfg.n_fft, cfg.num_mels, static_cast<double>(cfg.f_min),
                                     static_cast<double>(cfg.f_max), mel_fb_);
+    }
+
+    const int n_rows = n_freq_ > 0 ? static_cast<int>(mel_fb_.size() / static_cast<size_t>(n_freq_)) : 0;
+    fb_lo_.assign(n_rows, 0);
+    fb_hi_.assign(n_rows, 0);
+    for (int m = 0; m < n_rows; ++m) {
+        const float * row = mel_fb_.data() + static_cast<size_t>(m) * n_freq_;
+        int           lo  = n_freq_;
+        int           hi  = 0;
+        for (int k = 0; k < n_freq_; ++k) {
+            if (row[k] != 0.0f) {
+                lo = std::min(lo, k);
+                hi = k + 1;
+            }
+        }
+        if (lo < hi) {
+            fb_lo_[m] = lo - lo % 4;
+            fb_hi_[m] = hi;
+        }
     }
 
     // Sin/cos LUT for the mixed-radix FFT. Only the non-pow2 path
@@ -480,6 +528,11 @@ transcribe_status MelFrontend::compute(const float *        pcm,
 
     const bool whisper_mode = (cfg_.normalize == "per_utterance" || cfg_.normalize == "global");
 
+    // SpeechBrain power-to-dB (normalize == "sentence_mean"):
+    // 10*log10(max(x, amin)) in fp64, one rounding at storage.
+    const bool   db_mode  = (cfg_.normalize == "sentence_mean");
+    const double db_floor = static_cast<double>(cfg_.log_clamp_min > 0.0f ? cfg_.log_clamp_min : 1.0e-10f);
+
     int stft_threads = n_threads;
     if (stft_threads <= 0) {
         stft_threads = default_n_threads();
@@ -490,21 +543,10 @@ transcribe_status MelFrontend::compute(const float *        pcm,
 
     // Per-thread worker dispatcher. Strided frame assignment (stride =
     // stft_threads) keeps load balanced and per-thread memory access
-    // patterns mostly sequential.
+    // patterns mostly sequential. run_on_threads joins every thread and
+    // hands worker exceptions back to the caller.
     auto run_threaded = [&](auto && worker) {
-        if (stft_threads <= 1) {
-            worker(0);
-            return;
-        }
-        std::vector<std::thread> pool;
-        pool.reserve(static_cast<size_t>(stft_threads - 1));
-        for (int tid = 1; tid < stft_threads; ++tid) {
-            pool.emplace_back(worker, tid);
-        }
-        worker(0);
-        for (auto & th : pool) {
-            th.join();
-        }
+        run_on_threads(stft_threads, worker);
     };
 
     if (!n_fft_is_pow2) {
@@ -530,19 +572,25 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                 }
                 for (int m = 0; m < n_mels; ++m) {
                     const float * fb_row = mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+                    const int     k_hi   = fb_hi_[static_cast<size_t>(m)];
                     double        sum    = 0.0;
-                    int           k      = 0;
-                    for (; k < n_freq - 3; k += 4) {
+                    int           k      = fb_lo_[static_cast<size_t>(m)];
+                    for (; k < k_hi && k < n_freq - 3; k += 4) {
                         sum += static_cast<double>(fb_row[k]) * static_cast<double>(power_scratch[k]) +
                                static_cast<double>(fb_row[k + 1]) * static_cast<double>(power_scratch[k + 1]) +
                                static_cast<double>(fb_row[k + 2]) * static_cast<double>(power_scratch[k + 2]) +
                                static_cast<double>(fb_row[k + 3]) * static_cast<double>(power_scratch[k + 3]);
                     }
-                    for (; k < n_freq; ++k) {
+                    for (; k < k_hi; ++k) {
                         sum += static_cast<double>(fb_row[k]) * static_cast<double>(power_scratch[k]);
                     }
                     float result;
-                    if (whisper_mode) {
+                    if (db_mode) {
+                        if (sum < db_floor) {
+                            sum = db_floor;
+                        }
+                        result = static_cast<float>(10.0 * std::log10(sum));
+                    } else if (whisper_mode) {
                         if (sum < 1.0e-10) {
                             sum = 1.0e-10;
                         }
@@ -575,9 +623,12 @@ transcribe_status MelFrontend::compute(const float *        pcm,
         // A single FFTSetupD is shared across threads: it stores
         // precomputed twiddle factors, not transient state. vDSP's
         // forward FFT is thread-safe given per-thread split-complex
-        // buffers.
+        // buffers. Destroyed on every exit, including a worker exception
+        // rethrown by run_threaded (FftSetupGuard above).
         FFTSetupD    fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
         const size_t half_n    = static_cast<size_t>(n_fft / 2);
+
+        FftSetupGuard fft_setup_guard{ fft_setup };
 
         auto worker = [&](int tid) {
             std::vector<double>   fft_real(half_n);
@@ -603,7 +654,6 @@ transcribe_status MelFrontend::compute(const float *        pcm,
             }
         };
         run_threaded(worker);
-        vDSP_destroy_fftsetupD(fft_setup);
 #else
         // Hand-rolled radix-2 Cooley-Tukey FFT fallback for non-Apple.
         auto worker = [&](int tid) {
@@ -633,7 +683,15 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                     power.data(), n_freq, 0.0f, log_mel.data(), n_frames);
         {
             const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
-            if (whisper_mode) {
+            if (db_mode) {
+                for (size_t i = 0; i < total; ++i) {
+                    double v = static_cast<double>(log_mel[i]);
+                    if (v < db_floor) {
+                        v = db_floor;
+                    }
+                    log_mel[i] = static_cast<float>(10.0 * std::log10(v));
+                }
+            } else if (whisper_mode) {
                 for (size_t i = 0; i < total; ++i) {
                     double v = static_cast<double>(log_mel[i]);
                     if (v < 1.0e-10) {
@@ -666,19 +724,25 @@ transcribe_status MelFrontend::compute(const float *        pcm,
             const float * pwr = power.data() + static_cast<size_t>(t) * n_freq;
             for (int m = 0; m < n_mels; ++m) {
                 const float * fb_row = mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+                const int     k_hi   = fb_hi_[static_cast<size_t>(m)];
                 double        sum    = 0.0;
-                int           k      = 0;
-                for (; k < n_freq - 3; k += 4) {
+                int           k      = fb_lo_[static_cast<size_t>(m)];
+                for (; k < k_hi && k < n_freq - 3; k += 4) {
                     sum += static_cast<double>(fb_row[k]) * static_cast<double>(pwr[k]) +
                            static_cast<double>(fb_row[k + 1]) * static_cast<double>(pwr[k + 1]) +
                            static_cast<double>(fb_row[k + 2]) * static_cast<double>(pwr[k + 2]) +
                            static_cast<double>(fb_row[k + 3]) * static_cast<double>(pwr[k + 3]);
                 }
-                for (; k < n_freq; ++k) {
+                for (; k < k_hi; ++k) {
                     sum += static_cast<double>(fb_row[k]) * static_cast<double>(pwr[k]);
                 }
                 float result;
-                if (whisper_mode) {
+                if (db_mode) {
+                    if (sum < db_floor) {
+                        sum = db_floor;
+                    }
+                    result = static_cast<float>(10.0 * std::log10(sum));
+                } else if (whisper_mode) {
                     if (sum < 1.0e-10) {
                         sum = 1.0e-10;
                     }
@@ -701,6 +765,47 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     std::vector<double>().swap(padded);
     std::vector<float>().swap(padded_f32);
     std::vector<float>().swap(window_f32);
+
+    // ---- 5s. SpeechBrain sentence-mean normalize ----
+    // log_mel already holds 10*log10(max(x, amin)). Top-dB floor over time
+    // AND frequency (SpeechBrain clamps inside Filterbank), then subtract
+    // each mel bin's mean over ALL frames (InputNormalization, norm_type=
+    // "sentence", std_norm=False). No frame is dropped or masked: torch
+    // keeps the center-pad frames. fp64 accumulators, one rounding at
+    // storage.
+    if (db_mode) {
+        const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
+        if (cfg_.top_db > 0.0f) {
+            double max_all = -std::numeric_limits<double>::infinity();
+            for (size_t i = 0; i < total; ++i) {
+                const double v = static_cast<double>(log_mel[i]);
+                if (v > max_all) {
+                    max_all = v;
+                }
+            }
+            const double floor_val = max_all - static_cast<double>(cfg_.top_db);
+            for (size_t i = 0; i < total; ++i) {
+                if (static_cast<double>(log_mel[i]) < floor_val) {
+                    log_mel[i] = static_cast<float>(floor_val);
+                }
+            }
+        }
+        for (int m = 0; m < n_mels; ++m) {
+            float * row = log_mel.data() + static_cast<size_t>(m) * n_frames;
+            double  sum = 0.0;
+            for (int t = 0; t < n_frames; ++t) {
+                sum += static_cast<double>(row[t]);
+            }
+            const double mean = sum / static_cast<double>(n_frames);
+            for (int t = 0; t < n_frames; ++t) {
+                row[t] = static_cast<float>(static_cast<double>(row[t]) - mean);
+            }
+        }
+        out_mel      = std::move(log_mel);
+        out_n_mels   = n_mels;
+        out_n_frames = n_frames;
+        return TRANSCRIBE_OK;
+    }
 
     // ---- 5n. No-op normalize (NeMo "NA"/none) ----
     // Emit raw log-mel as-is: streaming Conformer variants (e.g.
@@ -886,12 +991,14 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         first_sample > static_cast<int64_t>(total_stream_samples)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    if (cfg_.pad_mode != "constant" || cfg_.normalize != "none" || cfg_.log_clamp_min != 0.0f) {
+    if (!supports_incremental()) {
         // Reflect padding, cross-frame normalization, and the LASR/MedASR
         // log floor-clamp are not expressible per frame (or compute() applies
         // them over the whole buffer); compute() is the only supported path
         // there. Adding a mode here requires keeping it bit-identical to the
-        // matching compute() branch.
+        // matching compute() branch. The eligibility contract is
+        // supports_incremental(); push-stream entry points gate on it up
+        // front with the same message.
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (n_frames < 0 || frame_begin < 0) {
@@ -986,6 +1093,52 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         }
     };
 
+    // Per-call scratch, hoisted out of the per-frame loop: the frame /
+    // power buffers and (mixed-radix path) the fp32 window copy are built
+    // once per call, and on Apple the vDSP FFTSetupD is created once per
+    // call behind the same FftSetupGuard pattern compute() uses and
+    // destroyed once at scope exit. Arithmetic order is unchanged — every
+    // buffer region is fully written before it is read within a frame (the
+    // FFT scratch halves are written by the recursion before use), so
+    // frame outputs stay bit-identical to the per-frame-allocation form.
+    std::vector<double> frame;       // pow2 non-Apple: [2 * n_fft]
+    std::vector<float>  fft_in;      // mixed-radix: [2 * n_fft]
+    std::vector<float>  fft_out;     // mixed-radix: [8 * n_fft]
+    std::vector<float>  window_f32;  // mixed-radix: [n_fft]
+    std::vector<float>  power(static_cast<size_t>(n_freq));
+    if (!n_fft_is_pow2) {
+        fft_in.assign(2 * static_cast<size_t>(n_fft), 0.0f);
+        fft_out.assign(8 * static_cast<size_t>(n_fft), 0.0f);
+        window_f32.resize(static_cast<size_t>(n_fft));
+        for (int k = 0; k < n_fft; ++k) {
+            window_f32[k] = static_cast<float>(window_[k]);
+        }
+    } else {
+#ifndef __APPLE__
+        frame.resize(2 * static_cast<size_t>(n_fft));
+#endif
+    }
+#ifdef __APPLE__
+    // vDSP real-input FFT (fp64), mirroring compute()'s Apple path: one
+    // setup per call, shared (not re-created) across the frame loop.
+    int                 log2n  = 0;
+    const size_t        half_n = static_cast<size_t>(n_fft / 2);
+    std::vector<double> fft_real;
+    std::vector<double> fft_imag;
+    FFTSetupD           fft_setup = nullptr;
+    if (n_fft_is_pow2) {
+        int tmp = n_fft;
+        while (tmp > 1) {
+            tmp >>= 1;
+            ++log2n;
+        }
+        fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
+        fft_real.resize(half_n);
+        fft_imag.resize(half_n);
+    }
+    FftSetupGuard fft_setup_guard{ fft_setup };
+#endif
+
     auto emit_frame = [&](int64_t t, int col) {
         if (t >= real_frames) {
             // Trailing partial frame: compute() zero-masks it for
@@ -995,42 +1148,25 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         const int64_t start = t * static_cast<int64_t>(hop) - pad;
         if (n_fft_is_pow2) {
 #ifdef __APPLE__
-            // vDSP real-input FFT (fp64), mirroring compute()'s Apple path.
-            const size_t          half_n = static_cast<size_t>(n_fft / 2);
-            std::vector<double>   fft_real(half_n);
-            std::vector<double>   fft_imag(half_n);
             DSPDoubleSplitComplex split = { fft_real.data(), fft_imag.data() };
-            int                   log2n = 0;
-            {
-                int tmp = n_fft;
-                while (tmp > 1) {
-                    tmp >>= 1;
-                    ++log2n;
-                }
-            }
-            FFTSetupD fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
             for (size_t k = 0; k < half_n; ++k) {
                 fft_real[k] = emph_f64(start + static_cast<int64_t>(2 * k)) * window_[2 * k];
                 fft_imag[k] = emph_f64(start + static_cast<int64_t>(2 * k) + 1) * window_[2 * k + 1];
             }
             vDSP_fft_zripD(fft_setup, &split, 1, log2n, FFT_FORWARD);
-            std::vector<float> power(static_cast<size_t>(n_freq));
             power[0]      = static_cast<float>(fft_real[0] * fft_real[0] * 0.25);
             power[half_n] = static_cast<float>(fft_imag[0] * fft_imag[0] * 0.25);
             for (size_t k = 1; k < half_n; ++k) {
                 power[k] = static_cast<float>((fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) * 0.25);
             }
-            vDSP_destroy_fftsetupD(fft_setup);
             mel_log_row(power.data(), col);
 #else
             // fp64 radix-2 path (matches compute() on non-Apple builds).
-            std::vector<double> frame(2 * static_cast<size_t>(n_fft));
             for (int k = 0; k < n_fft; ++k) {
                 frame[2 * static_cast<size_t>(k)]     = emph_f64(start + k) * window_[k];
                 frame[2 * static_cast<size_t>(k) + 1] = 0.0;
             }
             fft_radix2(frame.data(), n_fft);
-            std::vector<float> power(static_cast<size_t>(n_freq));
             for (int k = 0; k < n_freq; ++k) {
                 const double re = frame[2 * static_cast<size_t>(k)];
                 const double im = frame[2 * static_cast<size_t>(k) + 1];
@@ -1040,18 +1176,11 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
 #endif
         } else {
             // fp32 mixed-radix path (matches compute()'s fused worker).
-            std::vector<float> fft_in(2 * static_cast<size_t>(n_fft), 0.0f);
-            std::vector<float> fft_out(8 * static_cast<size_t>(n_fft), 0.0f);
-            std::vector<float> window_f32(static_cast<size_t>(n_fft));
-            for (int k = 0; k < n_fft; ++k) {
-                window_f32[k] = static_cast<float>(window_[k]);
-            }
             for (int k = 0; k < n_fft; ++k) {
                 fft_in[k] = emph_f32(start + k) * window_f32[k];
             }
             mixed_radix_fft_f32(fft_in.data(), n_fft, cos_lut_.data(), sin_lut_.data(),
                                 static_cast<int>(cos_lut_.size()), fft_out.data());
-            std::vector<float> power(static_cast<size_t>(n_freq));
             for (int k = 0; k < n_freq; ++k) {
                 const float re = fft_out[2 * k];
                 const float im = fft_out[2 * k + 1];
