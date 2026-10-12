@@ -1736,12 +1736,12 @@ export class TranscribeModel {
     ensureExitHook();
   }
 
-  /** Load a GGUF model. Awaits {@link initialize}, so it never blocks the event loop. */
-  static async load(
-    path: string,
-    opts: ModelOptions = {},
-  ): Promise<TranscribeModel> {
-    const n = await nativeAsync();
+  /**
+   * Shared ModelOptions -> native model_load_params marshalling used by
+   * {@link load} and {@link loadEmbeddedVad}: backend lookup, device handle
+   * resolution, and the removed-gpuDevice guard.
+   */
+  static #modelLoadParams(n: Native, opts: ModelOptions): any {
     const p: any = {};
     n.F.modelLoadParamsInit(p);
     if ("gpuDevice" in opts) {
@@ -1759,6 +1759,16 @@ export class TranscribeModel {
       }
       p.device = handle;
     }
+    return p;
+  }
+
+  /** Load a GGUF model. Awaits {@link initialize}, so it never blocks the event loop. */
+  static async load(
+    path: string,
+    opts: ModelOptions = {},
+  ): Promise<TranscribeModel> {
+    const n = await nativeAsync();
+    const p = TranscribeModel.#modelLoadParams(n, opts);
 
     const out: any[] = [null];
     const st = await callAsync<number>(n.F.modelLoadFile, path, p, out);
@@ -1779,23 +1789,7 @@ export class TranscribeModel {
     opts: ModelOptions = {},
   ): Promise<TranscribeModel> {
     const n = await nativeAsync();
-    const p: any = {};
-    n.F.modelLoadParamsInit(p);
-    if ("gpuDevice" in opts) {
-      throw new TranscribeError(
-        "gpuDevice was removed in 0.2; pass a device from getAvailableBackends() instead",
-      );
-    }
-    if (opts.backend) p.backend = lookup(BACKENDS, opts.backend, "backend");
-    if (opts.device !== undefined) {
-      const handle = DEVICE_HANDLES.get(opts.device);
-      if (!handle) {
-        throw new TranscribeError(
-          "device must be an entry returned by getAvailableBackends() or model.device",
-        );
-      }
-      p.device = handle;
-    }
+    const p = TranscribeModel.#modelLoadParams(n, opts);
 
     const out: any[] = [null];
     const st = await callAsync<number>(n.F.modelLoadEmbeddedVad, p, out);

@@ -139,14 +139,9 @@ impl Model {
         Model::load_with(path, &ModelOptions::default())
     }
 
-    /// Load a model from disk with explicit options (formats as for [`Model::load`]).
-    pub fn load_with(path: impl AsRef<Path>, options: &ModelOptions) -> Result<Model> {
-        // Pre-1.0 base-version lock against the loaded library (once).
-        version::ensure_compatible()?;
-
-        let path = path.as_ref();
-        let c_path = CString::new(path_bytes(path)?)?;
-
+    /// Shared `ModelOptions` -> native params marshalling for the load entry
+    /// points (backend + device handle resolution; no public API change).
+    fn load_params(options: &ModelOptions) -> sys::transcribe_model_load_params {
         let mut params: sys::transcribe_model_load_params = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_model_load_params_init(&mut params) };
         params.backend = options.backend.to_raw();
@@ -154,10 +149,17 @@ impl Model {
             .device
             .as_ref()
             .map_or(std::ptr::null_mut(), |device| device.handle);
+        params
+    }
 
-        let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
-        let status = unsafe { sys::transcribe_model_load_file(c_path.as_ptr(), &params, &mut out) };
-        check_model_load(status, &format!("load {}", path.display()))?;
+    /// Shared load finish path: status check on the loader's ownership
+    /// out-param (non-OK => null out, nothing leaked) + Model wrap.
+    fn finish_load(
+        status: sys::transcribe_status,
+        out: *mut sys::transcribe_model,
+        context: &str,
+    ) -> Result<Model> {
+        check_model_load(status, context)?;
         debug_assert!(!out.is_null());
 
         Ok(Model {
@@ -166,6 +168,20 @@ impl Model {
                 compute_lock: Mutex::new(false),
             }),
         })
+    }
+
+    /// Load a model from disk with explicit options (formats as for [`Model::load`]).
+    pub fn load_with(path: impl AsRef<Path>, options: &ModelOptions) -> Result<Model> {
+        // Pre-1.0 base-version lock against the loaded library (once).
+        version::ensure_compatible()?;
+
+        let path = path.as_ref();
+        let c_path = CString::new(path_bytes(path)?)?;
+        let params = Model::load_params(options);
+
+        let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
+        let status = unsafe { sys::transcribe_model_load_file(c_path.as_ptr(), &params, &mut out) };
+        Model::finish_load(status, out, &format!("load {}", path.display()))
     }
 
     /// Load the Silero VAD model embedded in the native library at its
@@ -181,25 +197,11 @@ impl Model {
         // Pre-1.0 base-version lock against the loaded library (once).
         version::ensure_compatible()?;
 
-        let mut params: sys::transcribe_model_load_params = unsafe { std::mem::zeroed() };
-        unsafe { sys::transcribe_model_load_params_init(&mut params) };
-        params.backend = options.backend.to_raw();
-        params.device = options
-            .device
-            .as_ref()
-            .map_or(std::ptr::null_mut(), |device| device.handle);
+        let params = Model::load_params(options);
 
         let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
         let status = unsafe { sys::transcribe_model_load_embedded_vad(&params, &mut out) };
-        check_model_load(status, "load embedded VAD")?;
-        debug_assert!(!out.is_null());
-
-        Ok(Model {
-            inner: Arc::new(ModelInner {
-                ptr: out,
-                compute_lock: Mutex::new(false),
-            }),
-        })
+        Model::finish_load(status, out, "load embedded VAD")
     }
 
     /// Open a session bound to this model with default session options.

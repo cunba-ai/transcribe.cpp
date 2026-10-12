@@ -1375,11 +1375,14 @@ extern "C" bool transcribe_backend_available(transcribe_backend_request kind) {
                            [&] { return transcribe_backend_available_impl(raw); });
 }
 
-extern "C" transcribe_status transcribe_model_load_file(const char *                                path,
-                                                        const struct transcribe_model_load_params * params,
-                                                        struct transcribe_model **                  out_model) {
-    const transcribe_status st = api_guard_status("transcribe_model_load_file", [&] {
-        const transcribe_status lst = transcribe_model_load_file_impl(path, params, out_model);
+// Shared loader forwarder finish: the api_guard wrapper + resolve_roles
+// post-step + the boundary-owned ownership postcondition (failure =>
+// *out_model == NULL, nothing leaked) common to transcribe_model_load_file
+// and transcribe_model_load_embedded_vad.
+template <typename LoadFn>
+static transcribe_status model_load_finish(const char * name, LoadFn && load, struct transcribe_model ** out_model) {
+    const transcribe_status st = api_guard_status(name, [&] {
+        const transcribe_status lst = load(out_model);
         return lst == TRANSCRIBE_OK && *out_model != nullptr ? transcribe::resolve_roles(*out_model) : lst;
     });
     // Boundary-owned postcondition: failure => *out_model == NULL.
@@ -1390,18 +1393,20 @@ extern "C" transcribe_status transcribe_model_load_file(const char *            
     return st;
 }
 
+extern "C" transcribe_status transcribe_model_load_file(const char *                                path,
+                                                        const struct transcribe_model_load_params * params,
+                                                        struct transcribe_model **                  out_model) {
+    return model_load_finish(
+        "transcribe_model_load_file",
+        [&](struct transcribe_model ** out) { return transcribe_model_load_file_impl(path, params, out); }, out_model);
+}
+
 extern "C" transcribe_status transcribe_model_load_embedded_vad(const struct transcribe_model_load_params * params,
                                                                 struct transcribe_model **                  out_model) {
-    const transcribe_status st = api_guard_status("transcribe_model_load_embedded_vad", [&] {
-        const transcribe_status lst = transcribe_model_load_embedded_vad_impl(params, out_model);
-        return lst == TRANSCRIBE_OK && *out_model != nullptr ? transcribe::resolve_roles(*out_model) : lst;
-    });
-    // Boundary-owned postcondition: failure => *out_model == NULL.
-    if (st != TRANSCRIBE_OK && out_model != nullptr && *out_model != nullptr) {
-        transcribe_model_free(*out_model);
-        *out_model = nullptr;
-    }
-    return st;
+    return model_load_finish(
+        "transcribe_model_load_embedded_vad",
+        [&](struct transcribe_model ** out) { return transcribe_model_load_embedded_vad_impl(params, out); },
+        out_model);
 }
 
 extern "C" void transcribe_model_free(struct transcribe_model * model) {

@@ -48,14 +48,22 @@ public final class Model: @unchecked Sendable {
         }
     }
 
-    /// Load a model from a GGUF file or a supported whisper.cpp Whisper/Silero
-    /// `.bin` (detected from the header). Runs the pre-1.0 version gate first.
-    public init(path: String, options: ModelOptions = .init()) throws {
-        try Transcribe.ensureCompatible()
+    /// Shared `ModelOptions` -> load-params marshalling for the load entry
+    /// points (`init(path:)` and `embeddedVad(options:)`); no public API
+    /// change.
+    private static func loadParams(_ options: ModelOptions) -> transcribe_model_load_params {
         var params = transcribe_model_load_params()
         transcribe_model_load_params_init(&params)
         params.backend = options.backend.cValue
         params.device = options.device?.handle
+        return params
+    }
+
+    /// Load a model from a GGUF file or a supported whisper.cpp Whisper/Silero
+    /// `.bin` (detected from the header). Runs the pre-1.0 version gate first.
+    public init(path: String, options: ModelOptions = .init()) throws {
+        try Transcribe.ensureCompatible()
+        var params = Model.loadParams(options)
         var out: OpaquePointer?
         let status = transcribe_model_load_file(path, &params, &out)
         try TranscribeError.check(status, context: "loading \(path)")
@@ -72,10 +80,7 @@ public final class Model: @unchecked Sendable {
     /// embedded asset.
     public static func embeddedVad(options: ModelOptions = .init()) throws -> Model {
         try Transcribe.ensureCompatible()
-        var params = transcribe_model_load_params()
-        transcribe_model_load_params_init(&params)
-        params.backend = options.backend.cValue
-        params.device = options.device?.handle
+        var params = Model.loadParams(options)
         var out: OpaquePointer?
         let status = transcribe_model_load_embedded_vad(&params, &out)
         try TranscribeError.check(status, context: "loading embedded VAD model")
