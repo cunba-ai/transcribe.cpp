@@ -202,14 +202,21 @@ struct transcribe_session : transcribe::SessionCore {
     void *                       progress_userdata = nullptr;
 
     // Returns 0 if no callback installed or callback returned 0 (continue);
-    // non-zero if the callback requested cancellation.
+    // non-zero if the callback requested cancellation. A throwing callback
+    // is contained here and treated as a cancel request, matching the
+    // include/transcribe.h typedef contract (same discipline as
+    // transcribe_log_invoke: exceptions never escape the C ABI).
     int emit_progress(const char * stage, int64_t completed, int64_t total) {
         if (progress_cb == nullptr) {
             return 0;
         }
         const float frac =
             total > 0 ? std::clamp(static_cast<float>(completed) / static_cast<float>(total), 0.0f, 1.0f) : 0.0f;
-        return progress_cb(frac, stage, completed, total, progress_userdata);
+        try {
+            return progress_cb(frac, stage, completed, total, progress_userdata);
+        } catch (...) {
+            return 1;
+        }
     }
 
     // Set by a run() driver when decode stops at the model's context /

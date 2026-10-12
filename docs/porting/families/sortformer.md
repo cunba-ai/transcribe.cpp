@@ -18,8 +18,8 @@ multitalker interop). Streaming posture: **natively streaming — PASS**; the
 chunk/lookahead contract is the preset menu in "Public API (diarize extension)"
 (default = GGUF-shipped checkpoint cfg; very_high_latency ~30.4 s lookahead
 ... low_latency ~1.04 s), exposed via `transcribe_sortformer_diarize_ext`.
-Push-audio `transcribe_stream_*` entry point is future work (STREAM-slot
-kind reserved by design).
+Push-audio `transcribe_stream_*` entry point is shipped as a separate
+STREAM-slot kind (see "Push-audio streaming" below).
 
 Streaming Sortformer is a **frame-level end-to-end neural speaker diarizer**
 (architecture pattern `encoder-diarizer`, new to this repo). It is NOT a
@@ -108,9 +108,10 @@ little-endian `0x53504653`, `TRANSCRIBE_EXT_SLOT_STREAM`, struct
 transcribe_sortformer_preset preset; }`, init function
 `transcribe_sortformer_push_stream_ext_init` (stamps `preset = DEFAULT`).
 Registered in `docs/extension-kinds.md`. One kind per schema: the preset
-enum is shared with the RUN-slot kind, but the slots are distinct and
-each kind stays in exactly one slot. `accepts_ext_kind` accepts `SFST`
-on RUN and `SFPS` on STREAM, nothing else. `caps.supports_streaming` is
+enum is shared with the DIARIZE_RUN-slot kind, but the slots are distinct
+and each kind stays in exactly one slot. `accepts_ext_kind` accepts `SFDR`
+on DIARIZE_RUN and `SFPS` on STREAM, nothing else (the 0.3 RUN-slot kind
+`SFST` is retired). `caps.supports_streaming` is
 forced on after `read_capability_kv` (the compute core is streaming by
 construction; the GGUF capability KV must not gate the surface).
 
@@ -118,7 +119,16 @@ construction; the GGUF capability KV must not gate the surface).
 
 One stream per session, single-threaded (matches the dispatcher's
 ACTIVE-state gate and the Rust binding's `&mut` lease; no locks inside
-the family). State hangs off `SortformerSession` as `PushStream`:
+the family). State hangs off `SortformerRunSession` (the ASR-side
+session, `src/arch/sortformer/sortformer.h`) as `PushStream`:
+
+The model carries both roles (`roles = TRANSCRIBE_ROLE_DIARIZE |
+TRANSCRIBE_ROLE_ASR`): offline diarization goes through the DIARIZE role
+(`transcribe_diarize_run`, no ASR session needed), while the push-stream
+surface rides the ASR side — it requires a session created via
+`transcribe_session_init` and drives `transcribe_stream_begin/_feed/
+_finalize` (a plain `transcribe_run` on that session has no run hook and
+returns NOT_IMPLEMENTED).
 
 - `active`, resolved `SortformerStreamParams` (preset resolved at begin,
   identical precedence to `run()`) and `ms_per_frame`.
@@ -283,11 +293,11 @@ clean 16-meeting result cannot certify a k tier; the tiers also save
 little disk (139 -> 92 MB) and are slower than Q8_0 on CPU. Full
 evidence: `reports/diar/diar_streaming_sortformer_4spk-v2.1.ami-ihm-test-fa.summary.md`.
 
-A future push-audio entry point (`transcribe_stream_begin/feed`, live
-diarization) registers a separate STREAM-slot kind taking the same preset
-enum; the multitalker interop path (raw T x 4 supervision into parakeet's
-layer-0 speaker kernel) is internal C++ and does not round-trip through
-this surface.
+The push-audio entry point (`transcribe_stream_begin/feed`, live
+diarization) is the separate STREAM-slot kind taking the same preset
+enum described above; the multitalker interop path (raw T x 4 supervision
+into parakeet's layer-0 speaker kernel) is internal C++ and does not
+round-trip through this surface.
 
 ## References
 
