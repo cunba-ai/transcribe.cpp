@@ -1505,8 +1505,18 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
     // rejection never releases and everything after (family error, abort,
     // throw) always does.
     transcribe::ScratchReleaseGuard scratch_release;
-    scratch_release.session = session;
-    return run_one_inner(session, pcm, n_samples, params, &scratch_release.armed);
+    scratch_release.session    = session;
+    const transcribe_status st = run_one_inner(session, pcm, n_samples, params, &scratch_release.armed);
+    // Completion handshake for a successful single run ("asr+<arch>", 1, 1).
+    // A non-zero callback return means cancel: mark aborted and report
+    // TRANSCRIBE_ERR_ABORTED with the finished result preserved in the
+    // scratch slot — the same rule the batch loops apply at their final
+    // utterance.
+    if (st == TRANSCRIBE_OK && session->emit_progress(transcribe::asr_progress_stage(session).c_str(), 1, 1) != 0) {
+        session->was_aborted = true;
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+    return st;
 }
 
 // Batch run (offline)
@@ -1648,9 +1658,30 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
     scratch_release.session = session;
     scratch_release.armed   = true;
 
+    // Progress bookends. The batch emits ("asr+<arch>", 0, n) here, once per
+    // utterance inside the shared loops (run_batch_serial for the serial
+    // fallback and family fallbacks, decode_batch_slices for the slice-decode
+    // fast paths), and (stage, n, n) after the chosen path completes. A
+    // non-zero callback return means cancel: abort with
+    // TRANSCRIBE_ERR_ABORTED, preserving completed utterances (the aborted
+    // slots are padded below so the result view still exposes n entries).
+    const std::string stage = transcribe::asr_progress_stage(session);
+    if (session->emit_progress(stage.c_str(), 0, n) != 0) {
+        session->was_aborted = true;
+        pad_batch_results_aborted(session, n);
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+
     // Fast path: a family with a batched compute graph owns the whole loop.
     if (session->model->arch->run_batch != nullptr) {
-        const transcribe_status st = session->model->arch->run_batch(session, pcm, n_samples, n, params);
+        transcribe_status st = session->model->arch->run_batch(session, pcm, n_samples, n, params);
+        // Completion handshake (skipped when the hook itself aborted): a
+        // canceling callback converts a finished batch into ABORTED with
+        // every result preserved — the pre-merge final-chunk rule.
+        if (st == TRANSCRIBE_OK && session->emit_progress(stage.c_str(), n, n) != 0) {
+            session->was_aborted = true;
+            st                   = TRANSCRIBE_ERR_ABORTED;
+        }
         // On abort the hook may retain only completed results; synthesize any
         // missing slots so the result-set view always exposes n entries.
         if (st == TRANSCRIBE_ERR_ABORTED) {
@@ -1668,8 +1699,15 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
     // a real run_batch() is forgone. run_one_inner re-validates the shared
     // params (idempotent) before the family run().
     session->batch_results.reserve(static_cast<size_t>(n));
-    const transcribe_status batch_status = transcribe::run_batch_serial(
+    transcribe_status batch_status = transcribe::run_batch_serial(
         session, pcm, n_samples, n, [&](const float * p, int ns) { return run_one_inner(session, p, ns, params); });
+
+    // Same completion handshake as the fast path (the serial loop emits only
+    // the intermediate per-utterance boundaries).
+    if (batch_status == TRANSCRIBE_OK && session->emit_progress(stage.c_str(), n, n) != 0) {
+        session->was_aborted = true;
+        batch_status         = TRANSCRIBE_ERR_ABORTED;
+    }
 
     // On abort the loop can break early, leaving fewer than n entries;
     // synthesize any missing slots so the result-set view always exposes n

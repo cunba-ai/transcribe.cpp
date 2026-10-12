@@ -189,8 +189,11 @@ struct transcribe_session : transcribe::SessionCore {
     transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     bool                      has_result  = false;
 
-    // Progress (set via transcribe_set_progress_callback). run() drivers
-    // call emit_progress() at chunk boundaries. Returns the callback's
+    // Progress (set via transcribe_set_progress_callback). The run/batch
+    // drivers call emit_progress() at utterance boundaries: the batch
+    // dispatcher emits the 0/n and n/n bookends, the shared loops
+    // (run_batch_serial / decode_batch_slices) each intermediate utterance,
+    // and a successful single run a final 1/1. Returns the callback's
     // int: 0 = continue, non-0 = cancel requested. Semantics mirror
     // audiocpp_progress_fn. Streaming runs do not fire it. (Abort /
     // cancellation lives on the SessionCore base in

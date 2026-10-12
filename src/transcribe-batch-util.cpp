@@ -4,13 +4,16 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "transcribe-arch.h"
 #include "transcribe-log.h"
+#include "transcribe-model.h"
 #include "transcribe-repetition-guard.h"
 #include "transcribe-session.h"
 
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -166,6 +169,11 @@ void fill_valid_frame_mask(ggml_tensor * mask, const std::vector<int> & real_len
     ggml_backend_tensor_set(mask, buf.data(), 0, buf.size() * sizeof(float));
 }
 
+std::string asr_progress_stage(const transcribe_session * session) {
+    const Arch * arch = (session != nullptr && session->model != nullptr) ? session->model->arch : nullptr;
+    return std::string("asr+") + ((arch != nullptr && arch->name != nullptr) ? arch->name : "?");
+}
+
 transcribe_status decode_batch_slices(transcribe_session * session,
                                       int                  n,
                                       const float *        host_buf,
@@ -173,8 +181,9 @@ transcribe_status decode_batch_slices(transcribe_session * session,
                                       int64_t              total_encode_us,
                                       int64_t              total_mel_us,
                                       const std::function<transcribe_status(int b, const float * slice)> & decode_fn) {
-    const int64_t enc_per_utt = total_encode_us / std::max(1, n);
-    const int64_t mel_per_utt = total_mel_us / std::max(1, n);
+    const int64_t     enc_per_utt = total_encode_us / std::max(1, n);
+    const int64_t     mel_per_utt = total_mel_us / std::max(1, n);
+    const std::string stage       = asr_progress_stage(session);
     for (int b = 0; b < n; ++b) {
         if (session->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
@@ -186,6 +195,14 @@ transcribe_status decode_batch_slices(transcribe_session * session,
         rs.t_mel_us                   = mel_per_utt;
         rs.t_encode_us                = enc_per_utt;
         session->batch_results.push_back(std::move(rs));
+        // Per-utterance progress ("asr+<arch>", b+1, n). The run_batch
+        // dispatcher owns the 0/n and n/n bookends, so the last slice does
+        // not emit here. A non-zero callback return means cancel: abort,
+        // preserving the completed slices (the dispatcher pads the rest).
+        if (b + 1 < n && session->emit_progress(stage.c_str(), b + 1, n) != 0) {
+            session->was_aborted = true;
+            return TRANSCRIBE_ERR_ABORTED;
+        }
     }
     return TRANSCRIBE_OK;
 }
@@ -195,7 +212,8 @@ transcribe_status run_batch_serial(transcribe_session *  session,
                                    const int *           n_samples,
                                    int                   n,
                                    const RunOneFn &      run_one) {
-    bool any_truncated = false;
+    bool              any_truncated = false;
+    const std::string stage         = asr_progress_stage(session);
     for (int i = 0; i < n; ++i) {
         if (session->poll_abort()) {
             session->was_truncated = any_truncated;
@@ -220,6 +238,16 @@ transcribe_status run_batch_serial(transcribe_session *  session,
             transcribe_session::ResultSet rs;
             rs.status = st;
             session->batch_results.push_back(std::move(rs));
+        }
+        // Per-utterance progress ("asr+<arch>", i+1, n). The run_batch
+        // dispatcher owns the 0/n and n/n bookends, so the last utterance
+        // does not emit here. A non-zero callback return means cancel:
+        // abort, preserving the completed utterances (the dispatcher pads
+        // the rest).
+        if (i + 1 < n && session->emit_progress(stage.c_str(), i + 1, n) != 0) {
+            session->was_truncated = any_truncated;
+            session->was_aborted   = true;
+            return TRANSCRIBE_ERR_ABORTED;
         }
         if (st == TRANSCRIBE_ERR_ABORTED) {
             session->was_truncated = any_truncated;

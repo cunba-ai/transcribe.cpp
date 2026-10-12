@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -138,13 +139,21 @@ void fill_keypad_mask(ggml_tensor * mask, const std::vector<int> & real_lens, in
 // valid-frame tensors.
 void fill_valid_frame_mask(ggml_tensor * mask, const std::vector<int> & real_lens, int T, int n);
 
+// Progress stage label for the ASR run/batch drivers: "asr+<arch name>"
+// (e.g. "asr+whisper"), or "asr+?" when the arch is unknown. This is the
+// label the batch dispatcher, run_batch_serial, and decode_batch_slices pass
+// to transcribe_session::emit_progress.
+std::string asr_progress_stage(const transcribe_session * session);
+
 // Per-utterance decode loop for the batched-encoder fast path. For each
 // utterance b in [0, n): polls abort, resets the scratch result slot, then
-// calls `decode_fn(b, host_buf + b*utt_elems)`. Each result is snapshotted into
-// session->batch_results with mel/encode timing set to the per-utterance
+// calls `decode_fn(b, host_buf + b*utt_elems)`. Each result is snapshotted
+// into session->batch_results with mel/encode timing set to the per-utterance
 // amortization of the shared encode + total mel cost (so per-utt timings sum to
 // the real batch wall cost); decode_fn's return is the utterance's status.
-// Returns TRANSCRIBE_ERR_ABORTED if abort fires between utterances, else OK.
+// Emits per-utterance progress (see asr_progress_stage; the dispatcher owns
+// the 0/n and n/n bookends) and returns TRANSCRIBE_ERR_ABORTED when abort or
+// a canceling progress callback fires, preserving completed slices.
 transcribe_status decode_batch_slices(transcribe_session * session,
                                       int                  n,
                                       const float *        host_buf,
@@ -161,7 +170,9 @@ transcribe_status decode_batch_slices(transcribe_session * session,
 // result, as it does from transcribe_run; a null pcm or n_samples <= 0 is
 // recorded as INVALID_ARG. session->was_truncated ends true if any utterance
 // truncated or stopped on repetition.
-// Returns TRANSCRIBE_ERR_ABORTED once an utterance aborts, else OK.
+// Emits per-utterance progress (see asr_progress_stage; the dispatcher owns
+// the 0/n and n/n bookends) and returns TRANSCRIBE_ERR_ABORTED once an
+// utterance aborts or the progress callback cancels.
 using RunOneFn = std::function<transcribe_status(const float * pcm, int n_samples)>;
 transcribe_status run_batch_serial(transcribe_session *  session,
                                    const float * const * pcm,
