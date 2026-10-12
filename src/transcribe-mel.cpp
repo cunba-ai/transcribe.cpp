@@ -280,6 +280,22 @@ void fft_radix2(double * data, int n) {
     }
 }
 
+#ifdef __APPLE__
+// Destroys a vDSP FFT setup on every exit, including a worker exception
+// rethrown by run_on_threads. Shared by compute() (one setup per call,
+// shared across threads) and compute_frames() (one setup per call; null —
+// a no-op — when the non-pow2 path does not need one).
+struct FftSetupGuard {
+    FFTSetupD setup = nullptr;
+
+    ~FftSetupGuard() {
+        if (setup != nullptr) {
+            vDSP_destroy_fftsetupD(setup);
+        }
+    }
+};
+#endif
+
 }  // namespace
 
 // ---------- MelFrontend ----------
@@ -607,17 +623,12 @@ transcribe_status MelFrontend::compute(const float *        pcm,
         // A single FFTSetupD is shared across threads: it stores
         // precomputed twiddle factors, not transient state. vDSP's
         // forward FFT is thread-safe given per-thread split-complex
-        // buffers.
+        // buffers. Destroyed on every exit, including a worker exception
+        // rethrown by run_threaded (FftSetupGuard above).
         FFTSetupD    fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
         const size_t half_n    = static_cast<size_t>(n_fft / 2);
 
-        // Destroyed on every exit, including a worker exception rethrown by
-        // run_threaded.
-        struct FftSetupGuard {
-            FFTSetupD setup;
-
-            ~FftSetupGuard() { vDSP_destroy_fftsetupD(setup); }
-        } fft_setup_guard{ fft_setup };
+        FftSetupGuard fft_setup_guard{ fft_setup };
 
         auto worker = [&](int tid) {
             std::vector<double>   fft_real(half_n);
@@ -980,12 +991,14 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         first_sample > static_cast<int64_t>(total_stream_samples)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    if (cfg_.pad_mode != "constant" || cfg_.normalize != "none" || cfg_.log_clamp_min != 0.0f) {
+    if (!supports_incremental()) {
         // Reflect padding, cross-frame normalization, and the LASR/MedASR
         // log floor-clamp are not expressible per frame (or compute() applies
         // them over the whole buffer); compute() is the only supported path
         // there. Adding a mode here requires keeping it bit-identical to the
-        // matching compute() branch.
+        // matching compute() branch. The eligibility contract is
+        // supports_incremental(); push-stream entry points gate on it up
+        // front with the same message.
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (n_frames < 0 || frame_begin < 0) {
@@ -1080,6 +1093,52 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         }
     };
 
+    // Per-call scratch, hoisted out of the per-frame loop: the frame /
+    // power buffers and (mixed-radix path) the fp32 window copy are built
+    // once per call, and on Apple the vDSP FFTSetupD is created once per
+    // call behind the same FftSetupGuard pattern compute() uses and
+    // destroyed once at scope exit. Arithmetic order is unchanged — every
+    // buffer region is fully written before it is read within a frame (the
+    // FFT scratch halves are written by the recursion before use), so
+    // frame outputs stay bit-identical to the per-frame-allocation form.
+    std::vector<double> frame;       // pow2 non-Apple: [2 * n_fft]
+    std::vector<float>  fft_in;      // mixed-radix: [2 * n_fft]
+    std::vector<float>  fft_out;     // mixed-radix: [8 * n_fft]
+    std::vector<float>  window_f32;  // mixed-radix: [n_fft]
+    std::vector<float>  power(static_cast<size_t>(n_freq));
+    if (!n_fft_is_pow2) {
+        fft_in.assign(2 * static_cast<size_t>(n_fft), 0.0f);
+        fft_out.assign(8 * static_cast<size_t>(n_fft), 0.0f);
+        window_f32.resize(static_cast<size_t>(n_fft));
+        for (int k = 0; k < n_fft; ++k) {
+            window_f32[k] = static_cast<float>(window_[k]);
+        }
+    } else {
+#ifndef __APPLE__
+        frame.resize(2 * static_cast<size_t>(n_fft));
+#endif
+    }
+#ifdef __APPLE__
+    // vDSP real-input FFT (fp64), mirroring compute()'s Apple path: one
+    // setup per call, shared (not re-created) across the frame loop.
+    int                 log2n  = 0;
+    const size_t        half_n = static_cast<size_t>(n_fft / 2);
+    std::vector<double> fft_real;
+    std::vector<double> fft_imag;
+    FFTSetupD           fft_setup = nullptr;
+    if (n_fft_is_pow2) {
+        int tmp = n_fft;
+        while (tmp > 1) {
+            tmp >>= 1;
+            ++log2n;
+        }
+        fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
+        fft_real.resize(half_n);
+        fft_imag.resize(half_n);
+    }
+    FftSetupGuard fft_setup_guard{ fft_setup };
+#endif
+
     auto emit_frame = [&](int64_t t, int col) {
         if (t >= real_frames) {
             // Trailing partial frame: compute() zero-masks it for
@@ -1089,42 +1148,25 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
         const int64_t start = t * static_cast<int64_t>(hop) - pad;
         if (n_fft_is_pow2) {
 #ifdef __APPLE__
-            // vDSP real-input FFT (fp64), mirroring compute()'s Apple path.
-            const size_t          half_n = static_cast<size_t>(n_fft / 2);
-            std::vector<double>   fft_real(half_n);
-            std::vector<double>   fft_imag(half_n);
             DSPDoubleSplitComplex split = { fft_real.data(), fft_imag.data() };
-            int                   log2n = 0;
-            {
-                int tmp = n_fft;
-                while (tmp > 1) {
-                    tmp >>= 1;
-                    ++log2n;
-                }
-            }
-            FFTSetupD fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
             for (size_t k = 0; k < half_n; ++k) {
                 fft_real[k] = emph_f64(start + static_cast<int64_t>(2 * k)) * window_[2 * k];
                 fft_imag[k] = emph_f64(start + static_cast<int64_t>(2 * k) + 1) * window_[2 * k + 1];
             }
             vDSP_fft_zripD(fft_setup, &split, 1, log2n, FFT_FORWARD);
-            std::vector<float> power(static_cast<size_t>(n_freq));
             power[0]      = static_cast<float>(fft_real[0] * fft_real[0] * 0.25);
             power[half_n] = static_cast<float>(fft_imag[0] * fft_imag[0] * 0.25);
             for (size_t k = 1; k < half_n; ++k) {
                 power[k] = static_cast<float>((fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) * 0.25);
             }
-            vDSP_destroy_fftsetupD(fft_setup);
             mel_log_row(power.data(), col);
 #else
             // fp64 radix-2 path (matches compute() on non-Apple builds).
-            std::vector<double> frame(2 * static_cast<size_t>(n_fft));
             for (int k = 0; k < n_fft; ++k) {
                 frame[2 * static_cast<size_t>(k)]     = emph_f64(start + k) * window_[k];
                 frame[2 * static_cast<size_t>(k) + 1] = 0.0;
             }
             fft_radix2(frame.data(), n_fft);
-            std::vector<float> power(static_cast<size_t>(n_freq));
             for (int k = 0; k < n_freq; ++k) {
                 const double re = frame[2 * static_cast<size_t>(k)];
                 const double im = frame[2 * static_cast<size_t>(k) + 1];
@@ -1134,18 +1176,11 @@ transcribe_status MelFrontend::compute_frames(const float *        pcm,
 #endif
         } else {
             // fp32 mixed-radix path (matches compute()'s fused worker).
-            std::vector<float> fft_in(2 * static_cast<size_t>(n_fft), 0.0f);
-            std::vector<float> fft_out(8 * static_cast<size_t>(n_fft), 0.0f);
-            std::vector<float> window_f32(static_cast<size_t>(n_fft));
-            for (int k = 0; k < n_fft; ++k) {
-                window_f32[k] = static_cast<float>(window_[k]);
-            }
             for (int k = 0; k < n_fft; ++k) {
                 fft_in[k] = emph_f32(start + k) * window_f32[k];
             }
             mixed_radix_fft_f32(fft_in.data(), n_fft, cos_lut_.data(), sin_lut_.data(),
                                 static_cast<int>(cos_lut_.size()), fft_out.data());
-            std::vector<float> power(static_cast<size_t>(n_freq));
             for (int k = 0; k < n_freq; ++k) {
                 const float re = fft_out[2 * k];
                 const float im = fft_out[2 * k + 1];

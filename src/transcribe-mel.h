@@ -169,6 +169,16 @@ class MelFrontend {
     // Number of mel bins (matches MelConfig::num_mels).
     int num_mels() const { return cfg_.num_mels; }
 
+    // True when compute_frames() (the incremental streaming form) supports
+    // this config: pad_mode == "constant" (zero pad, so each frame reads
+    // only its own window), normalize == "none" (no cross-frame
+    // statistics), and log_clamp_min == 0 (no whole-buffer log floor).
+    // compute_frames() enforces the same eligibility; frontends that fail
+    // this check must use compute().
+    bool supports_incremental() const {
+        return cfg_.pad_mode == "constant" && cfg_.normalize == "none" && cfg_.log_clamp_min == 0.0f;
+    }
+
     // Frame count for a given audio length, before calling compute().
     // Matches NeMo: floor(n_samples / hop_length) + 1.
     int n_frames_for(size_t n_samples) const;
