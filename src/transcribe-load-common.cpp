@@ -251,8 +251,8 @@ transcribe_status init_backends_explicit_device(transcribe_backend_request reque
         // implementation. A CUDA request on an HIP device (and the reverse)
         // is admitted; classification still reports the true vendor.
         if (!cuda_rocm_family(wanted) || !cuda_rocm_family(got)) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: selected %s device does not match requested %s backend",
-                    error_tag, kind_name(got), kind_name(wanted));
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: selected %s device does not match requested %s backend", error_tag,
+                    kind_name(got), kind_name(wanted));
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
         log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: %s request satisfied by selected %s device (same ggml-cuda backend)",
@@ -391,7 +391,7 @@ transcribe_status init_backends(transcribe_backend_request requested,
                     // with ERR_BACKEND. got_kind still reports the true
                     // vendor (see transcribe_model_backend()).
                     const BackendKind sibling = wanted == BackendKind::Cuda ? BackendKind::Rocm : BackendKind::Cuda;
-                    gpu_be                   = try_init_kind(sibling, error_tag, got_kind);
+                    gpu_be                    = try_init_kind(sibling, error_tag, got_kind);
                     if (gpu_be != nullptr) {
                         log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
                                 "%s: %s backend requested, satisfied by %s device (same ggml-cuda backend family)",

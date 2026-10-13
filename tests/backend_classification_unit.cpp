@@ -39,8 +39,8 @@ int g_failures = 0;
 
 int main() {
     using transcribe::BackendKind;
-    using transcribe::cuda_rocm_family;
     using transcribe::classify_backend_type;
+    using transcribe::cuda_rocm_family;
 
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_CPU, "CPU"), BackendKind::Cpu);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_ACCEL, "BLAS"), BackendKind::Accel);
