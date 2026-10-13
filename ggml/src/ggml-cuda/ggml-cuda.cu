@@ -5579,13 +5579,20 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_TRANSPOSE:
         case GGML_OP_ADD_ID:
         case GGML_OP_ADD1:
+            return true;
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
-        case GGML_OP_CLAMP:
         case GGML_OP_LOG:
-            return true;
+            // These share ggml_cuda_op_unary with GGML_OP_UNARY (unary.cu
+            // asserts src0 contiguity), so gate identically: a strided input
+            // schedules on the CPU instead of aborting the process.
+            return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_CLAMP:
+            // ggml_cuda_op_clamp asserts a row-contiguous src0 with unit
+            // nb[0] stride and a fully contiguous dst (the op tensor here).
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_SCALE:
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_BF16) && op->type == op->src[0]->type;
         case GGML_OP_ADD:
