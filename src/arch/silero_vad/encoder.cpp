@@ -68,11 +68,21 @@ transcribe_status build_graph(Session & s, const Model & m, int n) {
     ggml_set_input(g.windows);
 
     // [re (nbp) | im (nbp)] per window; the padded bins are zero.
+    //
+    // Square the whole contiguous spectrum FIRST and take the re/im views of
+    // the squared result. The reverse order (views -> sqr) feeds the CUDA
+    // unary op a strided view and trips GGML_ASSERT(ggml_is_contiguous(src0))
+    // in ggml-cuda/unary.cu — supports_op reports GGML_OP_SQR unconditionally
+    // supported, so the scheduler has no reason to route it elsewhere. The
+    // binary add below is stride-aware on every backend, and squaring the
+    // zero padded bins is a no-op, so element values and op count are
+    // unchanged.
     ggml_tensor * spec  = ggml_mul_mat(ctx, w.stft_basis_pad, g.windows);
-    ggml_tensor * re    = ggml_view_2d(ctx, spec, hp.n_bins_pad, spec->ne[1], spec->nb[1], 0);
-    ggml_tensor * im    = ggml_view_2d(ctx, spec, hp.n_bins_pad, spec->ne[1], spec->nb[1],
-                                       static_cast<size_t>(hp.n_bins_pad) * ggml_element_size(spec));
-    ggml_tensor * power = ggml_add(ctx, ggml_sqr(ctx, re), ggml_sqr(ctx, im));
+    ggml_tensor * spec2 = ggml_sqr(ctx, spec);
+    ggml_tensor * re    = ggml_view_2d(ctx, spec2, hp.n_bins_pad, spec2->ne[1], spec2->nb[1], 0);
+    ggml_tensor * im    = ggml_view_2d(ctx, spec2, hp.n_bins_pad, spec2->ne[1], spec2->nb[1],
+                                       static_cast<size_t>(hp.n_bins_pad) * ggml_element_size(spec2));
+    ggml_tensor * power = ggml_add(ctx, re, im);
     ggml_tensor * mag   = ggml_sqrt(ctx, power);
     g.stft_mag          = dump_point(mag, "fe.stft_mag");
 
