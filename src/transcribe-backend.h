@@ -43,6 +43,16 @@ enum class BackendKind {
 // Human-readable kind label for logs. Never nullptr.
 const char * kind_name(BackendKind kind);
 
+// Whether `kind` belongs to the ggml-cuda backend family: ggml compiles HIP
+// into ggml-cuda itself, and such builds register under the name "ROCm"
+// (GGML_CUDA_NAME, ggml-cuda.h) while NVIDIA builds register as "CUDA".
+// Classification keeps the kinds distinct (device info reports the real
+// vendor), but backend *admission* treats them as one family: a
+// TRANSCRIBE_BACKEND_CUDA request must succeed on an HIP build and vice
+// versa, because it is literally the same backend implementation. Callers
+// that need a vendor-exact pick pass an explicit device handle instead.
+bool cuda_rocm_family(BackendKind kind);
+
 // Unit-testable classification core. Production code normally calls
 // classify_device(), which fetches these two inputs from ggml.
 BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const char * reg_name);

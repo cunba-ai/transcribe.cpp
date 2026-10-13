@@ -186,9 +186,15 @@ pub enum Backend {
     Metal,
     /// Require Vulkan; errors if this build has no Vulkan.
     Vulkan,
-    /// Require CUDA; errors if this build has no CUDA.
+    /// Require the ggml-cuda backend; errors if this build has none.
+    /// One family with ROCm: ggml compiles HIP into ggml-cuda, so a
+    /// `Cuda` request loads on HIP builds too (whose devices register
+    /// as ROCm). [`Model::backend`](crate::Model::backend) reports
+    /// which one landed.
     Cuda,
-    /// Require ROCm; errors if this build has no ROCm.
+    /// Require the HIP build of the ggml-cuda backend; errors if this
+    /// build has none. Satisfied across the ggml-cuda family like
+    /// [`Backend::Cuda`] — see its doc.
     Rocm,
 }
 

@@ -246,9 +246,17 @@ transcribe_status init_backends_explicit_device(transcribe_backend_request reque
             return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (wanted != BackendKind::Unknown && got != wanted) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: selected %s device does not match requested %s backend", error_tag,
-                kind_name(got), kind_name(wanted));
-        return TRANSCRIBE_ERR_INVALID_ARG;
+        // ggml compiles HIP into ggml-cuda: such builds register as "ROCm"
+        // while NVIDIA builds register as "CUDA", but it is one backend
+        // implementation. A CUDA request on an HIP device (and the reverse)
+        // is admitted; classification still reports the true vendor.
+        if (!cuda_rocm_family(wanted) || !cuda_rocm_family(got)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: selected %s device does not match requested %s backend",
+                    error_tag, kind_name(got), kind_name(wanted));
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: %s request satisfied by selected %s device (same ggml-cuda backend)",
+                error_tag, kind_name(wanted), kind_name(got));
     }
 
     ggml_backend_t primary = dev_init_checked(dev, error_tag);
@@ -374,6 +382,22 @@ transcribe_status init_backends(transcribe_backend_request requested,
                 }
                 BackendKind    got_kind = BackendKind::Unknown;
                 ggml_backend_t gpu_be   = try_init_kind(wanted, error_tag, got_kind);
+                if (gpu_be == nullptr && cuda_rocm_family(wanted)) {
+                    // ggml compiles HIP into ggml-cuda: such builds register
+                    // every device under "ROCm" while NVIDIA builds register
+                    // "CUDA". One implementation, two names — retry with the
+                    // sibling kind so a CUDA request on an HIP build (and the
+                    // reverse) lands on the same backend instead of failing
+                    // with ERR_BACKEND. got_kind still reports the true
+                    // vendor (see transcribe_model_backend()).
+                    const BackendKind sibling = wanted == BackendKind::Cuda ? BackendKind::Rocm : BackendKind::Cuda;
+                    gpu_be                   = try_init_kind(sibling, error_tag, got_kind);
+                    if (gpu_be != nullptr) {
+                        log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                                "%s: %s backend requested, satisfied by %s device (same ggml-cuda backend family)",
+                                error_tag, kind_name(wanted), kind_name(got_kind));
+                    }
+                }
                 if (gpu_be == nullptr) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: %s backend requested but not available", error_tag,
                             kind_name(wanted));

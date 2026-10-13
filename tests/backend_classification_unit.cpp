@@ -24,10 +24,22 @@ int g_failures = 0;
         }                                                                                                            \
     } while (0)
 
+#define CHECK_BOOL(actual, expected)                                                                             \
+    do {                                                                                                         \
+        const bool _a = (actual);                                                                                \
+        const bool _e = (expected);                                                                              \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: got %s, expected %s\n", __FILE__, __LINE__, _a ? "true" : "false", \
+                         _e ? "true" : "false");                                                                 \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
+    } while (0)
+
 }  // namespace
 
 int main() {
     using transcribe::BackendKind;
+    using transcribe::cuda_rocm_family;
     using transcribe::classify_backend_type;
 
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_CPU, "CPU"), BackendKind::Cpu);
@@ -43,6 +55,20 @@ int main() {
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "SYCL"), BackendKind::Sycl);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "WebGPU"), BackendKind::OtherGpu);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr), BackendKind::OtherGpu);
+
+    // ggml-cuda family: HIP builds register as "ROCm" (GGML_CUDA_NAME), so a
+    // CUDA request must be admissible on a Rocm-classified device and vice
+    // versa — one backend implementation, two registry names. Everything
+    // else stays vendor-strict.
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Cuda), true);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Rocm), true);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Vulkan), false);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Metal), false);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Sycl), false);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Cpu), false);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Accel), false);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::OtherGpu), false);
+    CHECK_BOOL(cuda_rocm_family(BackendKind::Unknown), false);
 
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

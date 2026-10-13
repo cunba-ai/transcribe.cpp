@@ -778,11 +778,17 @@ TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(const struct transcribe_mo
  *         if Vulkan is not available in this build. Host-memory
  *         accelerators are still layered on when present.
  *
- * CUDA    Require the NVIDIA CUDA backend. Returns TRANSCRIBE_ERR_BACKEND
- *         if CUDA is not available in this build.
+ * CUDA    Require the ggml-cuda backend. Returns TRANSCRIBE_ERR_BACKEND
+ *         if it is not available in this build. ggml compiles HIP into
+ *         the same ggml-cuda backend, so on HIP builds (whose devices
+ *         register as ROCm) a CUDA request is satisfied by the HIP
+ *         device — the two requests below are one backend family.
  *
- * ROCM    Require the AMD ROCm backend. Returns TRANSCRIBE_ERR_BACKEND
- *         if ROCm is not available in this build.
+ * ROCM    Require the AMD ROCm (HIP) build of the ggml-cuda backend.
+ *         Returns TRANSCRIBE_ERR_BACKEND if it is not available in
+ *         this build. Like CUDA, satisfied across the ggml-cuda
+ *         family: on an NVIDIA-only machine a ROCM request loads on
+ *         the CUDA device.
  *
  * Callers that need to know which backend they actually landed on
  * can query transcribe_model_backend() after load.

@@ -39,6 +39,10 @@ const char * kind_name(BackendKind kind) {
     }
 }
 
+bool cuda_rocm_family(BackendKind kind) {
+    return kind == BackendKind::Cuda || kind == BackendKind::Rocm;
+}
+
 // Return true if `reg_name` (the ggml backend registry name) starts
 // with the given prefix. ggml's registry names look like "MTL",
 // "Vulkan", "CUDA", "ROCm", "SYCL", "BLAS", "CPU", etc. Prefix matching is

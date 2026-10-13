@@ -1048,7 +1048,15 @@ static bool transcribe_backend_available_impl(int raw) {
             return false;
     }
     for (size_t i = 0; i < n; ++i) {
-        if (transcribe::classify_device(ggml_backend_dev_get(i)) == want) {
+        const transcribe::BackendKind got = transcribe::classify_device(ggml_backend_dev_get(i));
+        if (got == want) {
+            return true;
+        }
+        // CUDA/ROCm are one ggml-cuda backend family (HIP builds register as
+        // "ROCm"): admitting one request on the other's devices means the
+        // availability probe must agree, or callers probing before a load
+        // would pick a request the load then rejects.
+        if (transcribe::cuda_rocm_family(want) && transcribe::cuda_rocm_family(got)) {
             return true;
         }
     }
