@@ -99,4 +99,4 @@ serde_json = "1"
 # to package them with the root crate (a member owns its whole subtree).
 [workspace]
 resolver = "2"
-members = ["bindings/rust/transcribe-cpp", "bindings/rust/xtask"]
+members = ["bindings/rust/transcribe-cpp", "bindings/rust/xtask", "tools/transcribe-e2e"]
