@@ -742,7 +742,7 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
         return st;
     }
     ggml_backend_sched_reset(pc->sched);
-    if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(pc->sched, eb.graph, "sortformer")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -823,7 +823,7 @@ static transcribe_status run_diar_streaming_window(DiarStreamScratch &          
     int T_diar = static_cast<int>(A.out->ne[1]);
 
     ggml_backend_sched_reset(sched);
-    if (!ggml_backend_sched_alloc_graph(sched, A.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(sched, A.graph, "sortformer")) {
         transcribe::debug::pop_name_prefix();
         return TRANSCRIBE_ERR_OOM;
     }
@@ -872,7 +872,7 @@ static transcribe_status run_diar_streaming_window(DiarStreamScratch &          
     fill_rel_pos_emb(sc.pos_buf, sc.pos_div_term, 2 * T_concat - 1, ed);
 
     ggml_backend_sched_reset(sched);
-    if (!ggml_backend_sched_alloc_graph(sched, B.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(sched, B.graph, "sortformer")) {
         transcribe::debug::pop_name_prefix();
         return TRANSCRIBE_ERR_OOM;
     }

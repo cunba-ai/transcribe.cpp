@@ -98,6 +98,48 @@ exception is `parakeet-ultra`, which cuts audio over 30 s into segments at pause
 found by its voice-activity head; length is still unbounded. See
 the [input-length contract](../input-limits.md).
 
+### Long-form audio
+
+Variants whose checkpoint uses full self-attention (`parakeet-tdt-0.6b-v2`,
+`parakeet-tdt-0.6b-v3`, `orukeet`, `parakeet-primeline`, the 1.1B and 110M
+TDT/RNN-T/CTC variants) run NeMo's `rel_pos_local_attn` window of
+`[256, 256]` encoder frames (20.5 s each side). NVIDIA documents this window
+as the family's long-audio mode (`change_attention_model("rel_pos_local_attn",
+[256, 256])`); NeMo itself defaults to full attention, which it rates for up
+to 24 minutes on an 80 GB A100. Clips up to 20.5 s run the full-attention
+graph, so their output is identical to full attention; beyond that, encoder
+time and memory grow linearly with length instead of quadratically, so a
+25-minute talk runs on a 16 GB laptop and multi-hour recordings fit.
+`parakeet-tdt_ctc-1.1b` ships its own `[128, 128]` window and
+`parakeet-ultra` keeps full attention inside its 30 s segments; the streaming
+variants keep their chunked attention.
+
+The port matches NeMo with the same window at tensor level (encoder blocks
+and `enc.final` within the family tolerances; six variants on a 70 s clip,
+the bounded-window graph, and v3 on a 35 s clip, the dense local graph), so
+the accuracy below is the model's rather than the port's.
+
+WER, full attention -> window (Q8_0):
+
+| set | v3 | v2 | tdt-1.1b | orukeet | primeline |
+| --- | --- | --- | --- | --- | --- |
+| TED-LIUM 3 full talks (10-25 min) | 2.87 -> 2.71 | 3.20 -> 3.11 | 4.98 -> 3.94 | 2.94 -> 3.06 | 3.57 -> 3.82 |
+| TED-LIUM 3 talks cut into 1-5 min pieces | 3.19 -> 2.35 | 3.06 -> 3.09 | 4.09 -> 3.91 | 3.37 -> 3.01 | 3.89 -> 4.00 |
+| LibriSpeech test-clean, 1-5 min clips | 2.52 -> 2.16 | 1.63 -> 1.74 | 1.31 -> 1.26 | 1.90 -> 1.86 | 2.69 -> 2.65 |
+
+On the other LibriSpeech-clip variants the window is equal or better
+(rnnt-0.6b 1.62 -> 1.51, rnnt-1.1b 1.31 -> 1.31, ctc-0.6b 1.86 -> 1.79,
+ctc-1.1b 2.11 -> 1.95, tdt_ctc-110m 2.51 -> 2.42).
+
+Non-English (Multilingual TEDx test talks): on 1-5 min clips the window is
+equal or better for `orukeet` in every language except Portuguese
+(10.1 -> 10.8), and for `parakeet-tdt-0.6b-v3` except French (15.5 -> 16.4)
+and Spanish; `parakeet-primeline` loses on French (10.7 -> 11.8),
+Portuguese and Spanish. On full talks v3's French drops from 12.4% to 17.7%.
+`parakeet-tdt-0.6b-v3` and its fine-tunes can drift into English on accented
+spontaneous speech in either mode; under full attention that drift can take
+over a whole talk, under the window it is confined to the window.
+
 ## Quick start
 
 Pick a variant and run:

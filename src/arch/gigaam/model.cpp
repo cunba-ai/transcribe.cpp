@@ -12,6 +12,7 @@
 #include "gguf.h"
 #include "gigaam.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
@@ -272,7 +273,7 @@ transcribe_status alloc_encoder_graph(GigaamSession * gc, GigaamModel * gm, ggml
         }
     }
     ggml_backend_sched_reset(gc->sched);
-    if (!ggml_backend_sched_alloc_graph(gc->sched, graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(gc->sched, graph, "gigaam")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
     }

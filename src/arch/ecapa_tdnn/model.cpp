@@ -416,7 +416,7 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     configure_sched_n_threads(s.sched, n_threads);
 
     ggml_backend_sched_reset(s.sched);
-    if (!ggml_backend_sched_alloc_graph(s.sched, gb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(s.sched, gb.graph, "ecapa_tdnn")) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: graph allocation failed", kTag);
         return TRANSCRIBE_ERR_OOM;
     }
