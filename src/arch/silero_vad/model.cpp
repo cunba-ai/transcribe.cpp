@@ -138,8 +138,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
             st != TRANSCRIBE_OK) {
             return st;
         }
-    } else if (auto st = load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag,
-                                                         &m->weight_storage);
+    } else if (auto st =
+                   load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag, &m->weight_storage);
                st != TRANSCRIBE_OK) {
         return st;
     }
