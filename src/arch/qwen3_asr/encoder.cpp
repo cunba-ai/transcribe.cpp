@@ -9,6 +9,7 @@
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -17,7 +18,7 @@
 
 namespace transcribe::qwen3_asr {
 
-// Timing / cu_seqlens
+// Timing
 
 int32_t aftercnn_len(int32_t mel_len) {
     // Three rounds of Conv2d(stride=2, pad=1, kernel=3):
@@ -70,24 +71,6 @@ std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length, double max
     return pe;
 }
 
-std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t, const QwenAsrHParams & hp) {
-    (void) hp;
-    const int32_t T = t.T_enc;
-    // Full attention over the valid aftercnn rows. The measured
-    // upstream reference (qwen_asr 0.0.6 + transformers eager / sdpa)
-    // ignores cu_seqlens and runs unmasked bidirectional attention over
-    // the post-pad-select tensor. vLLM's flash-attn-2 path honors
-    // cu_seqlens and chunks at window_aftercnn, but its LibriSpeech WER
-    // is worse than the eager path in our measurements; we follow the
-    // eager reference so that transcribe.cpp's greedy decode matches
-    // the per-tensor dumps byte-for-byte after the pad-row trim in
-    // build_enc_graph.
-    //
-    // Zero-filled mask = softmax(scale * QK) with no bias, which is
-    // identical to soft_max_ext(nullptr) and matches eager semantics.
-    return std::vector<float>(static_cast<size_t>(T) * T, 0.0f);
-}
-
 // Graph construction
 
 namespace {
@@ -125,9 +108,96 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_
     return y;
 }
 
-// One encoder block: pre-LN self-attention (bidirectional, full-
-// sequence mask supplied by the caller) + pre-LN GELU FFN. Residuals
-// are full 1.0.
+// Conv subsample + conv_out (no PE) for `mel` with ne=[mel_per_chunk,
+// n_mels, 1, n] (any n). Returns [d_model, T_per_chunk, n], or nullptr if the
+// conv output width does not match T_per_chunk.
+ggml_tensor * subsample_group(ggml_context *         ctx,
+                              const QwenAsrWeights & weights,
+                              int64_t                ds_h,
+                              int64_t                T_per_chunk,
+                              ggml_tensor *          mel) {
+    const int64_t n = mel->ne[3];
+
+    // Reference layout: PyTorch Conv2d on [B, 1, H=n_mels, W=mel_per_chunk].
+    // For ggml_conv_2d we use [W=mel_per_chunk, H=n_mels, C=1, N=B] —
+    // ggml swaps (W, H) relative to PyTorch, but the 3x3 kernel is
+    // symmetric and stride/pad are (2,2)/(1,1), so the arithmetic is
+    // invariant. Kernels are stored as ne=[KW=3, KH=3, IC, OC].
+    ggml_tensor * x = mel;
+    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv0_w, x,
+                                   /*s0=*/2, /*s1=*/2, /*p0=*/1, /*p1=*/1, /*d0=*/1, /*d1=*/1);
+    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
+    x               = ggml_gelu_erf(ctx, x);
+    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
+    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
+    x               = ggml_gelu_erf(ctx, x);
+    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
+    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
+    x               = ggml_gelu_erf(ctx, x);
+    // Now ne = [W=mel_ds, H=n_mels_ds, C=ds_h, N=n].
+
+    const int64_t W_ds = x->ne[0];
+    const int64_t H_ds = x->ne[1];
+    if (W_ds != T_per_chunk) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "qwen3_asr encoder: post-conv W=%lld does not match "
+                "per_chunk_aftercnn=%lld",
+                static_cast<long long>(W_ds), static_cast<long long>(T_per_chunk));
+        return nullptr;
+    }
+
+    // Reshape for the linear projection. Reference does:
+    //   permute(0, 3, 1, 2).contiguous().view(b, t, c*f)
+    // i.e. [B, C, F_ds, T_ds] -> [B, T_ds, C, F_ds] -> [B, T_ds, C*F_ds].
+    // The flat inner axis is (c * F_ds + f).
+    //
+    // In ggml ne layout we have [W=T_ds, H=F_ds, C=ds_h, N=B]. To get a
+    // flat axis of size ds_h * F_ds where c is the slower sub-axis and
+    // f the faster — matching the reference — we want axes in order
+    // [f, c, T, B]: ne = [F_ds, ds_h, T_ds, B]. ggml_permute uses INVERSE
+    // semantics vs PyTorch: the i-th argument says which NEW axis old axis
+    // i goes to (new[a_i] = old[i]). To mirror PyTorch's `permute(0,3,1,2)`
+    // on [B, C, F, T] (equivalently, map [W=13, H=16, C=480, N=11] →
+    // [F=16, C=480, T=13, B=11]), we need new[0]=old[1], new[1]=old[2],
+    // new[2]=old[0], new[3]=old[3], which is ggml_permute args (2, 0, 1, 3).
+    x = ggml_permute(ctx, x, /*a0=*/2, /*a1=*/0, /*a2=*/1, /*a3=*/3);
+    x = ggml_cont(ctx, x);
+    x = ggml_reshape_3d(ctx, x, H_ds * ds_h, T_per_chunk, n);
+
+    // Linear conv_out: [ds_h*F_ds, d_model] weight; maps to d_model.
+    x = ggml_mul_mat(ctx, weights.enc_subsample.conv_out, x);
+    return x;  // ne = [d_model, T_per_chunk, n]
+}
+
+// subsample_group over every chunk of `mel` (ne[3] = n_chunks), in groups of
+// kConvChunkGroup, concatenated back along the chunk axis. Returns
+// [d_model, T_per_chunk, n_chunks], or nullptr on a shape mismatch.
+ggml_tensor * subsample_chunks(ggml_context *         ctx,
+                               const QwenAsrWeights & weights,
+                               int64_t                ds_h,
+                               int64_t                T_per_chunk,
+                               ggml_tensor *          mel) {
+    const int64_t n_chunks = mel->ne[3];
+    ggml_tensor * out      = nullptr;
+    for (int64_t c0 = 0; c0 < n_chunks; c0 += kConvChunkGroup) {
+        const int64_t n = std::min<int64_t>(kConvChunkGroup, n_chunks - c0);
+        ggml_tensor * g = (n == n_chunks) ? mel :
+                                            ggml_view_4d(ctx, mel, mel->ne[0], mel->ne[1], mel->ne[2], n, mel->nb[1],
+                                                         mel->nb[2], mel->nb[3], static_cast<size_t>(c0) * mel->nb[3]);
+        ggml_tensor * y = subsample_group(ctx, weights, ds_h, T_per_chunk, g);
+        if (y == nullptr) {
+            return nullptr;
+        }
+        // Chaining the concat keeps the groups in dependency order, so the
+        // allocator retires one group's activations before the next group's.
+        out = (out == nullptr) ? y : ggml_concat(ctx, out, y, /*dim=*/2);
+    }
+    return out;
+}
+
+// One encoder block: pre-LN self-attention (bidirectional; `mask` may be
+// null for unmasked full attention) + pre-LN GELU FFN. Residuals are
+// full 1.0.
 ggml_tensor * build_enc_block(ggml_context *          ctx,
                               ggml_tensor *           x,
                               ggml_tensor *           mask,
@@ -190,6 +260,42 @@ ggml_tensor * build_enc_block(ggml_context *          ctx,
 
 }  // namespace
 
+SubsampleBuild build_subsample_graph(ggml_context *         ctx,
+                                     const QwenAsrWeights & weights,
+                                     const QwenAsrHParams & hp,
+                                     int                    n_chunks) {
+    SubsampleBuild sb{};
+    if (ctx == nullptr || n_chunks <= 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr subsample: invalid arg (ctx=%p, n_chunks=%d)",
+                static_cast<void *>(ctx), n_chunks);
+        return sb;
+    }
+
+    const int64_t mel_per_chunk = hp.enc_n_window * 2;
+    const int64_t T_per_chunk   = aftercnn_len(static_cast<int32_t>(mel_per_chunk));
+
+    sb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, mel_per_chunk, hp.enc_num_mel_bins, 1, n_chunks);
+    named(sb.mel_in, "enc.mel_in");
+    ggml_set_input(sb.mel_in);
+
+    sb.out = subsample_chunks(ctx, weights, hp.enc_downsample_hidden, T_per_chunk, sb.mel_in);
+    if (sb.out == nullptr) {
+        return sb;
+    }
+    named(sb.out, "enc.subsample.pass");
+    ggml_set_output(sb.out);
+
+    // ~36 nodes per group (3 convs + GELUs + projection + concat).
+    const int n_groups = (n_chunks + kConvChunkGroup - 1) / kConvChunkGroup;
+    sb.graph           = ggml_new_graph_custom(ctx, /*size=*/64 + 48 * n_groups, /*grads=*/false);
+    if (sb.graph == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr subsample: ggml_new_graph_custom failed");
+        return sb;
+    }
+    ggml_build_forward_expand(sb.graph, sb.out);
+    return sb;
+}
+
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const QwenAsrWeights & weights,
                                  const QwenAsrHParams & hp,
@@ -218,96 +324,29 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // shape see T_enc (not T_enc_padded). This matches the reference
     // byte-for-byte at the pos_add.out boundary and upward.
 
-    const int64_t d_model       = hp.enc_d_model;
-    const int64_t n_heads       = hp.enc_n_heads;
-    const int64_t ds_h          = hp.enc_downsample_hidden;
-    const int64_t n_mels        = hp.enc_num_mel_bins;
-    const int64_t mel_per_chunk = timing.mel_per_chunk;
-    const int64_t n_chunks      = timing.n_chunks;
-    const int64_t T_per_chunk   = timing.per_chunk_aftercnn;
-    const int64_t T_enc_padded  = timing.T_enc_padded;
-    const int64_t T_enc         = timing.T_enc;
+    const int64_t d_model      = hp.enc_d_model;
+    const int64_t n_heads      = hp.enc_n_heads;
+    const int64_t n_chunks     = timing.n_chunks;
+    const int64_t T_per_chunk  = timing.per_chunk_aftercnn;
+    const int64_t T_enc_padded = timing.T_enc_padded;
+    const int64_t T_enc        = timing.T_enc;
 
     // ----- Graph inputs -----
-    // mel layout: ggml fast-to-slow ne=[mel_per_chunk, n_mels, 1, n_chunks]
-    // ≡ [W=time, H=n_mels, C=1, N=n_chunks]. ggml_conv_2d with a
-    // symmetric 3×3 kernel and symmetric stride/pad is invariant under
-    // a W/H swap, so this is equivalent to Cohere's time-along-H
-    // convention.
-    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, mel_per_chunk, n_mels, 1, n_chunks);
-    named(eb.mel_in, "enc.mel_in");
-    ggml_set_input(eb.mel_in);
-    eb.dumps.mel_in = eb.mel_in;
+    // Conv subsample output [d_model, T_per_chunk, n_chunks], computed by
+    // build_subsample_graph (pre-PE).
+    eb.subsample_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_model, T_per_chunk, n_chunks);
+    named(eb.subsample_in, "enc.subsample.out");
+    ggml_set_input(eb.subsample_in);
+    eb.dumps.subsample_out = eb.subsample_in;
+    transcribe::debug::mark_tensor_for_dump(eb.subsample_in);
 
     eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_per_chunk);
     named(eb.pos_emb_in, "enc.pos_emb.in");
     ggml_set_input(eb.pos_emb_in);
 
-    eb.mask_in = ggml_new_tensor_2d(ctx, use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32, T_enc, T_enc);
-    named(eb.mask_in, "enc.attn_mask.in");
-    ggml_set_input(eb.mask_in);
-
-    // ----- Subsample: 3x Conv2d + GELU + conv_out linear -----
-    // Reference layout: PyTorch Conv2d on [B, 1, H=n_mels, W=mel_per_chunk].
-    // For ggml_conv_2d we use [W=mel_per_chunk, H=n_mels, C=1, N=B] —
-    // ggml swaps (W, H) relative to PyTorch, but the 3x3 kernel is
-    // symmetric and stride/pad are (2,2)/(1,1), so the arithmetic is
-    // invariant. Kernels are stored as ne=[KW=3, KH=3, IC, OC].
-    ggml_tensor * x = eb.mel_in;
-
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv0_w, x,
-                     /*s0=*/2, /*s1=*/2, /*p0=*/1, /*p1=*/1, /*d0=*/1, /*d1=*/1);
-    x = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
-    x = ggml_gelu_erf(ctx, x);
-
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
-    x = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
-    x = ggml_gelu_erf(ctx, x);
-
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
-    x = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
-    x = ggml_gelu_erf(ctx, x);
-    // Now ne = [W=mel_ds, H=n_mels_ds, C=ds_h, N=n_chunks].
-
-    const int64_t W_ds = x->ne[0];
-    const int64_t H_ds = x->ne[1];
-    if (W_ds != T_per_chunk) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "qwen3_asr encoder: post-conv W=%lld does not match "
-                "per_chunk_aftercnn=%lld",
-                static_cast<long long>(W_ds), static_cast<long long>(T_per_chunk));
-        return eb;
-    }
-
-    // Reshape for the linear projection. Reference does:
-    //   permute(0, 3, 1, 2).contiguous().view(b, t, c*f)
-    // i.e. [B, C, F_ds, T_ds] -> [B, T_ds, C, F_ds] -> [B, T_ds, C*F_ds].
-    // The flat inner axis is (c * F_ds + f).
-    //
-    // In ggml ne layout we have [W=T_ds, H=F_ds, C=ds_h, N=B]. To get a
-    // flat axis of size ds_h * F_ds where c is the slower sub-axis and
-    // f the faster — matching the reference — we want axes in order
-    // [f, c, T, B]: ne = [F_ds, ds_h, T_ds, B]. That's a permute(1, 2, 0, 3).
-    // ggml_permute uses INVERSE semantics vs PyTorch: the i-th argument
-    // says which NEW axis old axis i goes to (new[a_i] = old[i]). To
-    // mirror PyTorch's `permute(0,3,1,2)` on [B, C, F, T] (equivalently,
-    // map [W=13, H=16, C=480, N=11] → [F=16, C=480, T=13, B=11]), we
-    // need new[0]=old[1], new[1]=old[2], new[2]=old[0], new[3]=old[3],
-    // which is ggml_permute args (2, 0, 1, 3).
-    x = ggml_permute(ctx, x, /*a0=*/2, /*a1=*/0, /*a2=*/1, /*a3=*/3);
-    x = ggml_cont(ctx, x);
-    x = ggml_reshape_3d(ctx, x, H_ds * ds_h, T_per_chunk, n_chunks);
-
-    // Linear conv_out: [ds_h*F_ds, d_model] weight; maps to d_model.
-    x = ggml_mul_mat(ctx, weights.enc_subsample.conv_out, x);
-    // ne = [d_model, T_per_chunk, n_chunks]
-    named(x, "enc.subsample.out");
-    eb.dumps.subsample_out = x;
-    transcribe::debug::mark_tensor_for_dump(x);
-
     // Add sinusoidal PE (broadcast across n_chunks). pos_emb_in has
     // ne=[d_model, T_per_chunk]; ggml_add broadcasts missing axes.
-    x = ggml_add(ctx, x, eb.pos_emb_in);
+    ggml_tensor * x = ggml_add(ctx, eb.subsample_in, eb.pos_emb_in);
 
     // Flatten batch: [d_model, T_per_chunk, n_chunks] -> [d_model, T_enc_padded].
     // Row-major semantics: position r in the flattened sequence is
@@ -343,10 +382,10 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     eb.dumps.pos_add_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ----- 18 encoder blocks -----
+    // ----- 18 encoder blocks (unmasked full attention, see encoder.h) -----
     const int n_layers = static_cast<int>(weights.enc_blocks.size());
     for (int i = 0; i < n_layers; ++i) {
-        x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i], static_cast<int>(d_model),
+        x = build_enc_block(ctx, x, /*mask=*/nullptr, weights.enc_blocks[i], static_cast<int>(d_model),
                             static_cast<int>(n_heads), use_flash);
         if (i == 0) {
             named(x, "enc.block.0.out");
@@ -425,15 +464,12 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
         return eb;
     }
 
-    const int64_t d_model       = hp.enc_d_model;
-    const int64_t n_heads       = hp.enc_n_heads;
-    const int64_t ds_h          = hp.enc_downsample_hidden;
-    const int64_t n_mels        = hp.enc_num_mel_bins;
-    const int64_t mel_per_chunk = hp.enc_n_window * 2;
-    const int64_t T_per_chunk   = aftercnn_len(static_cast<int32_t>(mel_per_chunk));
-    const int64_t B             = n_batch;
-    const int64_t N             = B * n_chunks_max;  // packed conv batch
-    const int64_t T_pad_max     = n_chunks_max * T_per_chunk;
+    const int64_t d_model     = hp.enc_d_model;
+    const int64_t n_heads     = hp.enc_n_heads;
+    const int64_t T_per_chunk = aftercnn_len(hp.enc_n_window * 2);
+    const int64_t B           = n_batch;
+    const int64_t N           = B * n_chunks_max;  // packed chunk axis
+    const int64_t T_pad_max   = n_chunks_max * T_per_chunk;
 
     eb.n_batch      = n_batch;
     eb.n_chunks_max = n_chunks_max;
@@ -441,9 +477,10 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     eb.T_pad_max    = static_cast<int>(T_pad_max);
 
     // ----- Graph inputs -----
-    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, mel_per_chunk, n_mels, 1, N);
-    named(eb.mel_in, "enc.mel_in");
-    ggml_set_input(eb.mel_in);
+    // Conv subsample output for all N packed chunks (build_subsample_graph).
+    eb.subsample_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_model, T_per_chunk, N);
+    named(eb.subsample_in, "enc.subsample.out");
+    ggml_set_input(eb.subsample_in);
 
     eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_per_chunk);
     named(eb.pos_emb_in, "enc.pos_emb.in");
@@ -454,37 +491,8 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     named(eb.mask_in, "enc.attn_mask.in");
     ggml_set_input(eb.mask_in);
 
-    // ----- Subsample: 3x Conv2d + GELU (per-chunk over N = B*n_chunks_max) -----
-    ggml_tensor * x = eb.mel_in;
-    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv0_w, x, 2, 2, 1, 1, 1, 1);
-    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
-    x               = ggml_gelu_erf(ctx, x);
-    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
-    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
-    x               = ggml_gelu_erf(ctx, x);
-    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
-    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
-    x               = ggml_gelu_erf(ctx, x);
-    // ne = [W=T_per_chunk, H=n_mels_ds, C=ds_h, N].
-
-    const int64_t W_ds = x->ne[0];
-    const int64_t H_ds = x->ne[1];
-    if (W_ds != T_per_chunk) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "qwen3_asr encoder(batched): post-conv W=%lld != "
-                "per_chunk_aftercnn=%lld",
-                static_cast<long long>(W_ds), static_cast<long long>(T_per_chunk));
-        return eb;
-    }
-
-    // [W=T_ds, H=F_ds, C=ds_h, N] -> [F_ds, ds_h, T_ds, N] (see single-shot).
-    x = ggml_permute(ctx, x, 2, 0, 1, 3);
-    x = ggml_cont(ctx, x);
-    x = ggml_reshape_3d(ctx, x, H_ds * ds_h, T_per_chunk, N);
-    x = ggml_mul_mat(ctx, weights.enc_subsample.conv_out, x);  // [d_model, T_per_chunk, N]
-
     // Add sinusoidal PE (broadcast across the N = B*n_chunks_max axis).
-    x = ggml_add(ctx, x, eb.pos_emb_in);
+    ggml_tensor * x = ggml_add(ctx, eb.subsample_in, eb.pos_emb_in);
 
     // Reorganise N=(b*n_chunks_max + c) -> [d_model, T_per_chunk, n_chunks_max, B],
     // then flatten (T_per_chunk, n_chunks_max) chunk-major into the sequence:

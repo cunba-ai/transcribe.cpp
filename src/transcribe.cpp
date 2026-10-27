@@ -1069,7 +1069,11 @@ static bool transcribe_backend_available_impl(int raw) {
 // *out_model = NULL, "NULL params = all defaults" resolution, struct-size
 // gate, and the raw backend-enum boundary check that makes every
 // downstream `params->backend` read defined (see enum_field_raw).
+// The normalized full-size view is written to caller-owned storage in
+// `params_view` (the entry point rebinds its params pointer to it), so it
+// stays alive for the whole load.
 static transcribe_status model_load_prologue(const struct transcribe_model_load_params * params,
+                                             struct transcribe_model_load_params *       params_view,
                                              struct transcribe_model **                  out_model) {
     if (out_model == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1087,6 +1091,20 @@ static transcribe_status model_load_prologue(const struct transcribe_model_load_
     if (const auto st = check_input_struct_size(params->struct_size, k_min_model_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
+    // Full-size view for the family loaders: defaults first, then only the
+    // prefix the caller's struct_size covers, so every trailing field is
+    // readable (no_mmap reads false for a caller built before it existed).
+    // The bool is re-derived from its raw byte: a C caller can store any
+    // value there, and loading a non-0/1 byte as bool is UB.
+    transcribe_model_load_params_init(params_view);
+    std::memcpy(params_view, params,
+                static_cast<size_t>(std::min<uint64_t>(params->struct_size, sizeof(*params_view))));
+    {
+        unsigned char no_mmap_raw = 0;
+        std::memcpy(&no_mmap_raw, &params_view->no_mmap, sizeof(no_mmap_raw));
+        params_view->no_mmap = no_mmap_raw != 0;
+    }
+    params = params_view;
 
     // device is validated where the registry is available, in
     // load_common::init_backends. NULL means automatic selection; a non-NULL
@@ -1156,9 +1174,11 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
     // Set up ggml's timer before any family's load-timing ggml_time_us() runs
     // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init).
     ensure_ggml_time_init();
-    if (const auto st = model_load_prologue(params, out_model); st != TRANSCRIBE_OK) {
+    struct transcribe_model_load_params params_view;
+    if (const auto st = model_load_prologue(params, &params_view, out_model); st != TRANSCRIBE_OK) {
         return st;
     }
+    params = &params_view;
     if (path == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1216,9 +1236,11 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
 static transcribe_status transcribe_model_load_embedded_vad_impl(const struct transcribe_model_load_params * params,
                                                                  struct transcribe_model ** out_model) {
     ensure_ggml_time_init();
-    if (const auto st = model_load_prologue(params, out_model); st != TRANSCRIBE_OK) {
+    struct transcribe_model_load_params params_view;
+    if (const auto st = model_load_prologue(params, &params_view, out_model); st != TRANSCRIBE_OK) {
         return st;
     }
+    params = &params_view;
 
     // Header-only GGUF parse of the embedded asset. The array is static
     // storage (generated source compiled into this library), so the buffer

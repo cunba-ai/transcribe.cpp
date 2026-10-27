@@ -26,6 +26,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -69,10 +70,7 @@ CanaryQwenModel::~CanaryQwenModel() {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
     }
-    if (backend_buffer != nullptr) {
-        safe_buffer_free(backend_buffer);
-        backend_buffer = nullptr;
-    }
+    weight_storage.reset();
     if (bn_fused_buffer != nullptr) {
         safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
@@ -647,16 +645,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
-    ggml_backend_buffer_t weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-    if (weights_buffer == nullptr) {
-        gguf_free(gguf_data);
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_OOM;
-    }
-    m->backend_buffer = weights_buffer;
-    ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-    if (auto st = load_common::stream_tensor_data(loader.path(), gguf_data, m->ctx_meta, "canary_qwen");
+    if (const transcribe_status st = load_common::load_weights(loader.path(), gguf_data, m->ctx_meta, m->plan, params,
+                                                               "canary_qwen", m->weight_storage);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -838,7 +828,7 @@ transcribe_status run(transcribe_session *          context,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "canary_qwen")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -992,7 +982,7 @@ transcribe_status run(transcribe_session *          context,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "canary_qwen")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen run: prefill graph allocation failed (T_prompt=%d) — "
                             "out of memory. Lower transcribe_session_params.n_ctx or shorten "
@@ -1132,7 +1122,7 @@ transcribe_status run(transcribe_session *          context,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "canary_qwen")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen step: decode graph allocation failed — out of memory. "
                             "Lower transcribe_session_params.n_ctx or shorten the audio.");
@@ -1332,7 +1322,7 @@ transcribe_status encode_one(CanaryQwenSession *        cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "canary_qwen")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -1523,7 +1513,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "canary_qwen")) {
             return TRANSCRIBE_ERR_OOM;
         }
 
@@ -1607,7 +1597,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "canary_qwen")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
