@@ -55,8 +55,8 @@ struct cli_args {
 
     // SenseVoice / FunASR-Nano family knobs. The `--itn` flag is shared:
     // it routes to whichever family the loaded model belongs to. Ignored
-    // by non-ITN-aware families. Unset leaves the library default in place,
-    // which differs per family (sensevoice: on; funasr-nano: off), so the
+    // by non-ITN-aware families. Unset leaves the library default in place
+    // (on for sensevoice and fun-asr-mlt-nano, off for fun-asr-nano), so the
     // initializer here is only read once --itn / --no-itn has been seen.
     bool use_itn           = false;  // --itn / --no-itn
     bool itn_set           = false;

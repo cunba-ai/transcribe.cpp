@@ -554,17 +554,18 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             cmd += ["--raw-tokens"]
         if args.family in ("sensevoice", "funasr_nano"):
             # Pin ITN off rather than inheriting the run-time default, which
-            # is per-family and can change (sensevoice already defaults to ITN
-            # *on* so an unconfigured caller gets readable text; funasr_nano
-            # follows upstream's `itn=False`). The reference dumpers always run
+            # is per-variant and can change (sensevoice and
+            # fun-asr-mlt-nano-2512 default to ITN *on* so an unconfigured
+            # caller gets readable text). The reference dumpers always run
             # `itn=False`, and ITN is not cosmetic on either side: sensevoice
-            # selects a different textnorm prefix *embedding* prepended to the
-            # encoder input, and funasr_nano changes the prompt token
+            # selects a different textnorm prefix *embedding* prepended to
+            # the encoder input, and funasr_nano changes the prompt token
             # sequence. Inheriting the default would compare C++ ITN-on
             # tensors against ITN-off reference tensors and fail the gate for
             # a reason that has nothing to do with numerics. Explicit for both
-            # families so a future default flip cannot silently break the
-            # gate. Same pin, same reason, as scripts/wer/run.py.
+            # families so the run-time default cannot silently break the
+            # gate. scripts/wer/run.py pins per variant instead, since MLT's
+            # published WER is measured with ITN on.
             cmd += ["--no-itn"]
         cmd.append(str(audio))
 
