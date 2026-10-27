@@ -26,12 +26,12 @@
     "batching": {"supported":true,"verified":false}
   },
   "downloads": [
-    {"quant":"F32","filename":"bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf","size_bytes":2960100448},
-    {"quant":"F16","filename":"bundle/multitalker-parakeet-streaming-0.6b-v1-F16.gguf","size_bytes":1482674272},
-    {"quant":"Q8_0","filename":"bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf","size_bytes":873443456},
-    {"quant":"Q6_K","filename":"bundle/multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf","size_bytes":743197824},
-    {"quant":"Q5_K_M","filename":"bundle/multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf","size_bytes":681209984},
-    {"quant":"Q4_K_M","filename":"bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf","size_bytes":617132160}
+    {"quant":"F32","filename":"multitalker-parakeet-streaming-0.6b-v1-F32.gguf","size_bytes":2960100448},
+    {"quant":"F16","filename":"multitalker-parakeet-streaming-0.6b-v1-F16.gguf","size_bytes":1482674272},
+    {"quant":"Q8_0","filename":"multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf","size_bytes":873443456},
+    {"quant":"Q6_K","filename":"multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf","size_bytes":743197824},
+    {"quant":"Q5_K_M","filename":"multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf","size_bytes":681209984},
+    {"quant":"Q4_K_M","filename":"multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf","size_bytes":617132160}
   ],
   "accuracy_benchmarks": [
     {"dataset":"fleurs","split":"test","language":"en","quant":"Q8_0","metric":"wer","err_pct":6.52,"ci95":[5.95,7.12],"n_utts":647,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":672,"del":172,"ins":105},"empty_hyp":0,"utts_over_50pct":1,"measurement_provenance":"legacy-published"},

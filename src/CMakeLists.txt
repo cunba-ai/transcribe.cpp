@@ -39,6 +39,7 @@ add_library(transcribe ${_transcribe_lib_type}
     transcribe-flash-policy.cpp
     transcribe-backend.cpp
     transcribe-load-common.cpp
+    transcribe-mmap.cpp
     transcribe-weights-util.cpp
     transcribe-bin-loader.cpp
     transcribe-batch-util.cpp

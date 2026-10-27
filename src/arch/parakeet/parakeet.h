@@ -10,6 +10,7 @@
 #include "../sortformer/sortformer.h"  // embedded diarizer (multitalker bundle)
 #include "decoder.h"
 #include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
@@ -104,8 +105,8 @@ struct ParakeetModel final : public transcribe_model {
     // load_common::init_backends (see transcribe-backend.h). plan's
     // scheduler_list owns the backends; the destructor frees them in
     // reverse order.
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
+    transcribe::BackendPlan                plan;
+    transcribe::load_common::WeightStorage weight_storage;
 
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.

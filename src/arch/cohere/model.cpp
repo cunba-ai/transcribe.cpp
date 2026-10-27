@@ -187,6 +187,14 @@ bool kv_cache_init_batched(CohereKvCache & cache,
 }
 
 CohereModel::~CohereModel() {
+    if (q_bias_fused_ctx != nullptr) {
+        ggml_free(q_bias_fused_ctx);
+        q_bias_fused_ctx = nullptr;
+    }
+    if (q_bias_fused_buffer != nullptr) {
+        safe_buffer_free(q_bias_fused_buffer);
+        q_bias_fused_buffer = nullptr;
+    }
     if (bn_fused_ctx != nullptr) {
         ggml_free(bn_fused_ctx);
         bn_fused_ctx = nullptr;
@@ -207,10 +215,7 @@ CohereModel::~CohereModel() {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
     }
-    if (backend_buffer != nullptr) {
-        safe_buffer_free(backend_buffer);
-        backend_buffer = nullptr;
-    }
+    weight_storage.reset();
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
         safe_backend_free(*it);
     }
@@ -341,36 +346,52 @@ transcribe_status fuse_batch_norm(CohereModel & m) {
 //   q_u = (W_q x + q_b) + pos_u = W_q x + (q_b + pos_u)
 //   q_v = (W_q x + q_b) + pos_v = W_q x + (q_b + pos_v)
 // so pre-adding q_b into pos_u/pos_v is identical and drops the explicit
-// `q = q + q_b` graph op. We null attn_q_b after so the builder skips the add.
+// `q = q + q_b` graph op. The sums go into new tensors in q_bias_fused_ctx /
+// q_bias_fused_buffer (the GGUF-backed pos_bias tensors may be a read-only
+// memory map, and weights are never written after load); the block's
+// pos_u/pos_v slots are repointed at them and attn_q_b is nulled so the
+// builder skips the add. weights.cpp binds all three as F32 (q_b [d_model],
+// pos_u/v [head_dim, n_heads]) and read_cohere_hparams rejects d_model not
+// divisible by n_heads, so every block fuses.
 transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     const size_t n_blocks = m.weights.blocks.size();
     if (n_blocks == 0) {
         return TRANSCRIBE_OK;
     }
 
-    const int64_t d_model  = m.hparams.enc_d_model;
-    const int64_t n_heads  = m.hparams.enc_n_heads;
-    const int64_t head_dim = n_heads > 0 ? d_model / n_heads : 0;
+    const int64_t d_model = m.hparams.enc_d_model;
 
-    if (head_dim * n_heads != d_model) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "cohere: d_model (%lld) != head_dim*n_heads; "
-                "skipping encoder Q-bias fusion",
-                (long long) d_model);
-        return TRANSCRIBE_OK;
+    const size_t     ctx_size = n_blocks * 2 * ggml_tensor_overhead() + 256;
+    ggml_init_params params   = { ctx_size, nullptr, true };
+    m.q_bias_fused_ctx        = ggml_init(params);
+    if (m.q_bias_fused_ctx == nullptr) {
+        return TRANSCRIBE_ERR_OOM;
     }
+
+    // Same shape and name as the tensors they replace, on the same backend.
+    std::vector<ggml_tensor *> fused_u(n_blocks, nullptr);
+    std::vector<ggml_tensor *> fused_v(n_blocks, nullptr);
+    for (size_t i = 0; i < n_blocks; ++i) {
+        const auto & b = m.weights.blocks[i];
+        fused_u[i] = ggml_new_tensor(m.q_bias_fused_ctx, GGML_TYPE_F32, ggml_n_dims(b.attn_pos_u), b.attn_pos_u->ne);
+        fused_v[i] = ggml_new_tensor(m.q_bias_fused_ctx, GGML_TYPE_F32, ggml_n_dims(b.attn_pos_v), b.attn_pos_v->ne);
+        ggml_set_name(fused_u[i], ggml_get_name(b.attn_pos_u));
+        ggml_set_name(fused_v[i], ggml_get_name(b.attn_pos_v));
+    }
+
+    m.q_bias_fused_buffer = ggml_backend_alloc_ctx_tensors(m.q_bias_fused_ctx, m.plan.primary);
+    if (m.q_bias_fused_buffer == nullptr) {
+        return TRANSCRIBE_ERR_OOM;
+    }
+    ggml_backend_buffer_set_usage(m.q_bias_fused_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
     const size_t       nbytes = static_cast<size_t>(d_model) * sizeof(float);
     std::vector<float> q_bias(d_model);
     std::vector<float> pos_u(d_model);
     std::vector<float> pos_v(d_model);
 
-    size_t fused = 0;
     for (size_t i = 0; i < n_blocks; ++i) {
         auto & b = m.weights.blocks[i];
-        if (b.attn_q_b == nullptr || b.attn_pos_u == nullptr || b.attn_pos_v == nullptr) {
-            continue;
-        }
 
         ggml_backend_tensor_get(b.attn_q_b, q_bias.data(), 0, nbytes);
         ggml_backend_tensor_get(b.attn_pos_u, pos_u.data(), 0, nbytes);
@@ -383,18 +404,16 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
             pos_v[j] += q_bias[j];
         }
 
-        ggml_backend_tensor_set(b.attn_pos_u, pos_u.data(), 0, nbytes);
-        ggml_backend_tensor_set(b.attn_pos_v, pos_v.data(), 0, nbytes);
+        ggml_backend_tensor_set(fused_u[i], pos_u.data(), 0, nbytes);
+        ggml_backend_tensor_set(fused_v[i], pos_v.data(), 0, nbytes);
 
-        // Drop the reference so the graph builder skips the add.
-        // Tensor memory stays allocated inside ctx_meta.
-        b.attn_q_b = nullptr;
-        ++fused;
+        // Repoint the slots; drop q_b so the graph builder skips the add.
+        b.attn_pos_u = fused_u[i];
+        b.attn_pos_v = fused_v[i];
+        b.attn_q_b   = nullptr;
     }
 
-    if (fused > 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks", fused);
-    }
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks", n_blocks);
     return TRANSCRIBE_OK;
 }
 
@@ -572,19 +591,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
-    ggml_backend_buffer_t weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-    if (weights_buffer == nullptr) {
-        gguf_free(gguf_data);
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_OOM;
-    }
-    m->backend_buffer = weights_buffer;
-    ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-    // Stream tensor data from the GGUF file into the backend buffer
-    // slots. See transcribe-load-common.h for the shared loop.
-    if (const transcribe_status st =
-            transcribe::load_common::stream_tensor_data(loader.path(), gguf_data, m->ctx_meta, "cohere");
+    if (const transcribe_status st = transcribe::load_common::load_weights(
+            loader.path(), gguf_data, m->ctx_meta, m->plan, params, "cohere", m->weight_storage);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
