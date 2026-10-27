@@ -970,7 +970,7 @@ transcribe_status whisper_prefix_ids(const WhisperModel & cm, const char * prefi
 
 // Generic prompting (transcribe_run_params::vocabulary / prompt) rendered into
 // the <|startofprev|> slot, as text-only ids (the caller prepends the marker).
-// Text is `Glossary: {terms}` (", "-joined), then " " + prompt, tokenized in
+// Text is the terms ", "-joined, then " " + prompt, tokenized in
 // HF get_prompt_ids form (" " + text.strip()). The slot holds at most
 // `budget` tokens; Whisper natively keeps the LAST tokens, which would drop
 // the highest-priority terms, so overflow is resolved here instead: context
@@ -989,7 +989,7 @@ transcribe_status whisper_generic_prompt_ids(const WhisperModel &          cm,
     }
     transcribe::prompting::FittedPrompt fit;
     if (const transcribe_status st = transcribe::prompting::fit_terms_and_context(
-            cm.tok, transcribe::prompting::terms(params), { " Glossary: ", ", ", "" }, ctx, budget, "whisper run", fit);
+            cm.tok, transcribe::prompting::terms(params), { " ", ", ", "" }, ctx, budget, "whisper run", fit);
         st != TRANSCRIBE_OK) {
         return st;
     }
