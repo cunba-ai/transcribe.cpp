@@ -1,0 +1,18 @@
+[package]
+name = "transcribe-e2e"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end check suite that drives the fork's transcribe.dll exactly the way sound-rs does: dynload + the safe transcribe-cpp wrapper"
+
+[dependencies]
+# Same consumption posture as sound-rs/sound-server (models.registry.json:
+# transcribe-cpp, features=["dynload"], default-features=false): runtime
+# dlopen of transcribe.dll, zero compile-time native deps.
+transcribe-cpp = { path = "../../bindings/rust/transcribe-cpp", features = [
+    "dynload",
+], default-features = false }
+
+[[bin]]
+name = "transcribe-e2e"
+path = "src/main.rs"
