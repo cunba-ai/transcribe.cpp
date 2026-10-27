@@ -166,6 +166,10 @@ struct MoonshineStreamingSession final : public transcribe_session {
     // stream_feed / stream_finalize skip a redundant decode when no
     // new encoder frames have been committed since the previous one.
     int32_t                          stream_last_decoded_T = 0;
+    // Set once stream_T_emitted reaches the adapter's position table
+    // (model.cpp adapter_max_frames): further audio is dropped and the
+    // stream reports transcribe_was_truncated(). Reset at stream_begin.
+    bool                             stream_input_capped   = false;
     // Recent partial-decode token id sequences, used to compute the
     // longest common prefix that's safe to mark committed across feeds.
     // Reset at stream_begin; updated after every successful partial decode.

@@ -9,8 +9,9 @@
 //      window=4 pool of valid frames. We expose the bypass-step char-CTC
 //      mid_logits (1024 → 348) as `enc.ctc_logits` — the exact tensor
 //      the reference model computes at self_conditioning_layer for the
-//      self-conditioning residual. The pooled BPE head is computed
-//      host-side at run time.
+//      self-conditioning residual. The pooled BPE head runs in-graph on
+//      window-pooled hidden states and only per-window argmax ids leave the
+//      device (see build_encoder_graph).
 //   2. All-hidden-states capture: the projector consumes 4 encoder
 //      hidden states (post-LN, pre-bypass at the chosen layer
 //      boundaries; indices [4, 8, 12, -1] 1-indexed → layer outputs
@@ -54,15 +55,19 @@ struct EncoderBuild {
     ggml_tensor * zero_pad        = nullptr;  // optional [hidden, T_pad-T_enc]
 
     // Outputs.
-    ggml_tensor * cat_out         = nullptr;  // [num_enc_layers * hidden, T_enc]
-                                              //  the projector input
-    ggml_tensor * ctc_logits      = nullptr;  // [enc_out_dim=348, T_enc]
-    ggml_tensor * ctc_bpe_logits  = nullptr;  // [bpe_output_dim, T_enc]
-                                              //  raw frame-level (no pool)
-    ggml_tensor * mid_blank_probs = nullptr;  // [T_enc] — softmax(mid_ctc)[blank].
-                                              //  Used host-side as the BPE pool's
-                                              //  importance weight (importance =
-                                              //  1 - blank_prob_mid).
+    ggml_tensor *              cat_out         = nullptr;  // [num_enc_layers * hidden, T_enc]
+                                                           //  the projector input
+    ggml_tensor *              ctc_logits      = nullptr;  // [enc_out_dim=348, T_enc]
+    ggml_tensor *              mid_blank_probs = nullptr;  // [T_enc] — softmax(mid_ctc)[blank].
+                                                           //  importance = 1 - blank_prob_mid is
+                                                           //  the BPE pool's per-frame weight.
+    // Pooled BPE CTC head: argmax over bpe_output_dim per pool window, in
+    // consecutive tiles of windows (tile k covers windows
+    // [k * kBpeTileWindows, ...)), plus each window's total importance so the
+    // host can treat all-blank windows exactly like the reference.
+    std::vector<ggml_tensor *> bpe_window_ids;             // each [n_tile] i32
+    ggml_tensor *              bpe_window_mass = nullptr;  // [1, n_windows] f32
+    int                        n_bpe_windows   = 0;
 
     ggml_cgraph * graph = nullptr;
 
@@ -96,7 +101,25 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
 std::vector<int32_t> precompute_pos_rows(int context_size, int max_pos_emb);
 std::vector<float>   precompute_last_block_mask(int context_size, int t_enc_remainder);
 
-// Host-side BPE CTC pool + greedy decode.
+// Pool windows per BPE-head tile: bounds the [bpe_output_dim, tile] f32
+// logits the head materialises (~103 MB at 100352 x 256).
+constexpr int kBpeTileWindows = 256;
+
+// Greedy collapse of the in-graph pooled BPE head: one argmax id per pool
+// window and the window's total importance. Windows whose importance sum is
+// <= 1e-9 emit blank, exactly as compute_bpe_ctc_initial_hypothesis does.
+// Returns false (and leaves out_token_ids empty) if the two vectors disagree
+// in length, which can only be a graph/caller bug: the tiles cover every
+// window and both are read from tensors sized eb.n_bpe_windows.
+bool collapse_bpe_window_ids(const std::vector<int32_t> & window_ids,
+                             const std::vector<float> &   window_mass,
+                             int                          blank_id,
+                             std::vector<int32_t> &       out_token_ids);
+
+// Host-side BPE CTC pool + greedy decode over frame-level logits. This is
+// the reference formulation; run() uses the in-graph pooled head above
+// (sum_t w_t (W h_t + b) = W (sum_t w_t h_t) + b because the window weights
+// sum to 1) and keeps this as the documented semantics.
 //
 // Input:
 //   importance_non_blank  [T_enc] host row of (1 - blank_prob) values used

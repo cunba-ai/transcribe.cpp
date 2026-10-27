@@ -74,7 +74,7 @@ need and do not have a length gate.
 
 | Families | Limit source | Behavior |
 | --- | --- | --- |
-| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for cohere/canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
+| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary, moonshine_streaming | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or an encoder-side positional table (`enc_pos_emb_max_len` for cohere/canary; the adapter `pos_emb` table, 4096 frames = 81.9 s, for moonshine_streaming) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. A moonshine_streaming *stream* that reaches its cap is truncated instead (see "Streaming is the exception"). |
 
 A clip's sample count deterministically fixes its decoder prefill size or
 encoder frame count, so the library checks the relevant bound before running
@@ -107,7 +107,7 @@ on sequences which are identical and are obviously looping
 
 | Families | Window | Behavior |
 | --- | --- | --- |
-| sensevoice (~30 s), medasr (~400 s), moonshine (output-bound, ~48 s), moonshine_streaming (output-bound, ~17 min) | training / positional window | Any length is accepted; past the window the library emits a `WARN` (degraded accuracy is possible) and proceeds. `max_audio_ms` reports the window as advisory. |
+| sensevoice (~30 s), medasr (~400 s), moonshine (output-bound, ~48 s) | training / positional window | Any length is accepted; past the window the library emits a `WARN` (degraded accuracy is possible) and proceeds. `max_audio_ms` reports the window as advisory. |
 
 These families have no hard architectural wall but were trained on a bounded
 window; beyond it, accuracy degrades rather than failing. The library does not
@@ -119,11 +119,12 @@ Moonshine is the honest edge case in this bucket: its cap is on *output*
 audio length — a dense short clip can hit it too. It is reported via
 `transcribe_was_truncated()` and a `WARN` (and, offline, the hard
 `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` status) when the cap is reached.
-`moonshine_streaming` has the same output-bound shape with a much larger window
-(`dec_max_position_embeddings = 4096`, ≈ 17 min); because it also streams, its
-truncation follows the streaming rule below — `stream_finalize` still returns
-`TRANSCRIBE_OK` and the truncation surfaces only through
-`transcribe_was_truncated()`.
+`moonshine_streaming` used to be listed here as output-bound (≈ 17 min). It is
+not: its encoder adapter adds a position embedding per encoder frame from a
+4096-entry table, so input past 81.9 s has no defined output (the reference
+raises an index error, and the port used to read past the table). It is now a
+hard-cap family (bucket 2) for offline input, and a stream that reaches the cap
+follows the streaming rule below.
 
 ## Context sizing and the `n_ctx` knob
 
@@ -194,7 +195,8 @@ IDLE/ACTIVE/FINISHED/FAILED), and `stream_feed` / `stream_finalize` return the
 status of *that step*, not a verdict on the whole transcript. So when a
 streaming decode reaches its context cap (e.g. `voxtral_realtime` at its
 absolute position limit — hours of continuous audio, or `moonshine_streaming`
-at its output window), the stream does **not** fail and `stream_finalize`
+at its 81.9 s input cap, past which it ignores further audio), the stream does
+**not** fail and `stream_finalize`
 returns `TRANSCRIBE_OK`; the truncation is surfaced through
 `transcribe_was_truncated(session)` and a `WARN`. This is deliberate:
 forcing a stream into a failed terminal state on truncation would discard the

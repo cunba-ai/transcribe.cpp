@@ -10,9 +10,9 @@
 //     forward pass — no KV cache, is_causal=False)
 //
 // The forward composes in one run() call as:
-//   PCM -> mel -> 2-frame stack -> encoder graph (emit cat_out,
-//     ctc_logits, ctc_bpe_logits) -> host CTC pool + greedy decode of
-//     the BPE head -> initial hypothesis -> add_insertion_slots ->
+//   PCM -> mel -> 2-frame stack -> encoder graph (emit cat_out, ctc_logits,
+//     in-graph pooled BPE head argmax per window) -> host greedy collapse
+//     -> initial hypothesis -> add_insertion_slots ->
 //     text_ids -> decoder forward graph (with projector audio embeds
 //     concatenated to the front of inputs_embeds) -> text_logits ->
 //     argmax + collapse + drop EOS -> final transcript.
@@ -366,8 +366,12 @@ transcribe_status init_context(transcribe_model *                model,
     cc->n_threads         = params->n_threads;
     cc->kv_type           = params->kv_type;
     cc->n_ctx             = transcribe_session_params_n_ctx(params);
-    cc->encoder_use_flash = false;
-    cc->decoder_use_flash = false;  // bidirectional path doesn't use KV cache
+    cc->encoder_use_flash = false;  // the Shaw block-local attention has no flash form
+    // The bidirectional editor attends over audio + text in one pass;
+    // flash keeps it from materialising [T_total, T_total, n_heads] scores
+    // (~1.07 GB f32 per layer at the 4096-token cap). TRANSCRIBE_NO_FLASH
+    // restores the mul_mat + soft_max path.
+    cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
     *out_ctx = cc.release();
@@ -519,43 +523,26 @@ transcribe_status run(transcribe_session *          ctx_base,
     cc->enc_cat_host.resize(static_cast<size_t>(cat_h) * cat_T);
     ggml_backend_tensor_get(eb.cat_out, cc->enc_cat_host.data(), 0, cc->enc_cat_host.size() * sizeof(float));
 
-    const int n_ctc_vocab = static_cast<int>(eb.ctc_logits->ne[0]);
-    cc->ctc_logits_host.resize(static_cast<size_t>(n_ctc_vocab) * cat_T);
-    ggml_backend_tensor_get(eb.ctc_logits, cc->ctc_logits_host.data(), 0, cc->ctc_logits_host.size() * sizeof(float));
-
-    int n_bpe_vocab = 0;
-    if (eb.ctc_bpe_logits != nullptr) {
-        n_bpe_vocab = static_cast<int>(eb.ctc_bpe_logits->ne[0]);
-        cc->ctc_bpe_logits_host.resize(static_cast<size_t>(n_bpe_vocab) * cat_T);
-        ggml_backend_tensor_get(eb.ctc_bpe_logits, cc->ctc_bpe_logits_host.data(), 0,
-                                cc->ctc_bpe_logits_host.size() * sizeof(float));
-    }
-
-    std::vector<float> mid_non_blank;
-    if (eb.mid_blank_probs != nullptr) {
-        std::vector<float> mid_blank(t_enc);
-        ggml_backend_tensor_get(eb.mid_blank_probs, mid_blank.data(), 0, mid_blank.size() * sizeof(float));
-        mid_non_blank.resize(t_enc);
-        for (int i = 0; i < t_enc; ++i) {
-            mid_non_blank[i] = 1.0f - mid_blank[i];
-        }
-    }
-
-    // ggml stores ne[0]=F as the innermost (fastest-varying) axis. For
-    // a tensor with ne=[F, T_enc], the host buffer layout in memory is
-    //   buf[t * F + f] = element at ggml indices (f, t)
-    // which is the SAME as `[T_enc, F]` numpy row-major (T outer, F
-    // inner). No transpose needed: the host-side BPE pool reads
-    //   ctc_bpe_logits_host[t * V + v]
-    // and gets the v-th logit at frame t correctly.
-    (void) n_ctc_vocab;
-
-    // Initial BPE hypothesis.
+    // Initial BPE hypothesis from the in-graph pooled head (see
+    // build_encoder_graph): one argmax id per pool window, plus each window's
+    // importance mass for the all-blank rule.
     std::vector<int32_t> hyp_ids;
-    if (n_bpe_vocab > 0 && !mid_non_blank.empty()) {
-        compute_bpe_ctc_initial_hypothesis(mid_non_blank, cc->ctc_bpe_logits_host, n_bpe_vocab, t_enc,
-                                           cm->hparams.enc_bpe_pool_window,
-                                           /*blank_id=*/cm->hparams.enc_bpe_blank_id, hyp_ids);
+    if (eb.bpe_window_mass != nullptr && eb.n_bpe_windows > 0) {
+        std::vector<float> window_mass(static_cast<size_t>(eb.n_bpe_windows));
+        ggml_backend_tensor_get(eb.bpe_window_mass, window_mass.data(), 0, window_mass.size() * sizeof(float));
+        std::vector<int32_t> window_ids;
+        window_ids.reserve(static_cast<size_t>(eb.n_bpe_windows));
+        for (ggml_tensor * ids : eb.bpe_window_ids) {
+            const size_t off = window_ids.size();
+            window_ids.resize(off + static_cast<size_t>(ids->ne[0]));
+            ggml_backend_tensor_get(ids, window_ids.data() + off, 0, static_cast<size_t>(ids->ne[0]) * sizeof(int32_t));
+        }
+        if (!collapse_bpe_window_ids(window_ids, window_mass, /*blank_id=*/cm->hparams.enc_bpe_blank_id, hyp_ids)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                "granite_nar run: BPE head emitted %zu window ids but %zu window masses",
+                                window_ids.size(), window_mass.size());
+            return TRANSCRIBE_ERR_BACKEND;
+        }
     }
     if (hyp_ids.empty()) {
         // No tokens — emit empty transcript and return.
@@ -684,8 +671,12 @@ transcribe_status run(transcribe_session *          ctx_base,
             return TRANSCRIBE_ERR_OOM;
         }
     }
-    ForwardBuild fb = build_forward_graph(dec_ctx, cm->weights, cm->hparams, cc->n_audio_tokens, n_text);
-    if (fb.graph == nullptr || fb.out == nullptr) {
+    // Full [vocab, n_text] logits only when tensors are being dumped (the
+    // dec.text_logits parity tap); otherwise argmax in-graph.
+    const bool   full_logits = transcribe::debug::enabled();
+    ForwardBuild fb          = build_forward_graph(dec_ctx, cm->weights, cm->hparams, cc->n_audio_tokens, n_text,
+                                                   cc->decoder_use_flash, full_logits);
+    if (fb.graph == nullptr || (fb.out == nullptr && fb.text_ids.empty())) {
         ggml_free(dec_ctx);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -720,16 +711,26 @@ transcribe_status run(transcribe_session *          ctx_base,
     try_dump("dec.flat_embeds", fb.dumps.flat_embeds, "decoder");
     try_dump("dec.text_logits", fb.dumps.text_logits, "decoder");
 
-    // Read text-portion logits. ggml stores ne[0]=vocab as the innermost
-    // axis, which means the host buffer layout is [t * vocab + v] —
-    // i.e. `[n_text, vocab]` numpy row-major already. No transpose.
-    const int64_t      vocab = fb.out->ne[0];
-    std::vector<float> logits_host(static_cast<size_t>(vocab) * n_text);
-    ggml_backend_tensor_get(fb.out, logits_host.data(), 0, logits_host.size() * sizeof(float));
-    ggml_free(dec_ctx);
-
     std::vector<int32_t> final_ids;
-    argmax_collapse_drop_eos(logits_host, static_cast<int>(vocab), n_text, cm->hparams.dec_eos_id, final_ids);
+    if (fb.out != nullptr) {
+        // Read text-portion logits. ggml stores ne[0]=vocab as the innermost
+        // axis, which means the host buffer layout is [t * vocab + v] —
+        // i.e. `[n_text, vocab]` numpy row-major already. No transpose.
+        const int64_t      vocab = fb.out->ne[0];
+        std::vector<float> logits_host(static_cast<size_t>(vocab) * n_text);
+        ggml_backend_tensor_get(fb.out, logits_host.data(), 0, logits_host.size() * sizeof(float));
+        argmax_collapse_drop_eos(logits_host, static_cast<int>(vocab), n_text, cm->hparams.dec_eos_id, final_ids);
+    } else {
+        std::vector<int32_t> row_ids;
+        row_ids.reserve(static_cast<size_t>(n_text));
+        for (ggml_tensor * ids : fb.text_ids) {
+            const size_t off = row_ids.size();
+            row_ids.resize(off + static_cast<size_t>(ids->ne[0]));
+            ggml_backend_tensor_get(ids, row_ids.data() + off, 0, static_cast<size_t>(ids->ne[0]) * sizeof(int32_t));
+        }
+        collapse_drop_eos(row_ids, cm->hparams.dec_eos_id, final_ids);
+    }
+    ggml_free(dec_ctx);
 
     cc->full_text = cm->tok.decode(final_ids.data(), static_cast<int>(final_ids.size()));
     cc->raw_text  = cc->full_text;  // no post-processing, via transcribe_raw_text

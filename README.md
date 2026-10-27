@@ -224,6 +224,15 @@ loaded; write a new file and rename it over the old one. `--no-mmap`
 (`transcribe_model_load_params::no_mmap`, or `TRANSCRIBE_NO_MMAP=1`) copies the
 weights instead.
 
+Models whose FFN gate and up weights are stored back to back (every packed
+variant: granite, canary-qwen, qwen3-asr, voxtral, voxtral-realtime, moss,
+funasr-nano) are fused at load time by pointing one tensor at those bytes
+instead of packing a second copy, so the fusion usually costs no extra weight
+memory. It falls back to the copying path when the device layout does not allow
+that (tensor storage padded or the mapping split, e.g. a file larger than the
+device's max buffer size). `TRANSCRIBE_NO_GATE_UP_ALIAS=1` forces the copying
+path.
+
 ## Bindings
 
 Official bindings wrap the C API for other languages:

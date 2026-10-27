@@ -266,6 +266,23 @@ transcribe_apply_warnings(transcribe_prefill_chunk_mask_unit)
 add_test(NAME transcribe_prefill_chunk_mask_unit COMMAND transcribe_prefill_chunk_mask_unit)
 
 # -----------------------------------------------------------------------------
+# granite_nar BPE CTC pool: in-graph pooled head vs the frame-level reference
+# (pure host, no model)
+
+add_executable(transcribe_granite_nar_bpe_pool_unit
+    granite_nar_bpe_pool_unit.cpp)
+
+target_link_libraries(transcribe_granite_nar_bpe_pool_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_granite_nar_bpe_pool_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_granite_nar_bpe_pool_unit)
+
+add_test(NAME transcribe_granite_nar_bpe_pool_unit
+    COMMAND transcribe_granite_nar_bpe_pool_unit)
+
+# -----------------------------------------------------------------------------
 # Per-run decode budget rule (pure host, no model)
 
 add_executable(transcribe_decode_budget_unit
@@ -348,6 +365,23 @@ transcribe_apply_warnings(transcribe_conv_pw_promote_unit)
 
 add_test(NAME transcribe_conv_pw_promote_unit
     COMMAND transcribe_conv_pw_promote_unit)
+
+# -----------------------------------------------------------------------------
+# causal_lm::pack_gate_up: alias / copy / mismatch, no model needed
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_pack_gate_up_unit
+    pack_gate_up_unit.cpp)
+
+target_link_libraries(transcribe_pack_gate_up_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_pack_gate_up_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_pack_gate_up_unit)
+
+add_test(NAME transcribe_pack_gate_up_unit
+    COMMAND transcribe_pack_gate_up_unit)
 
 # -----------------------------------------------------------------------------
 # Dispatcher-level transcribe_run behavior
@@ -1050,30 +1084,30 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         SKIP_RETURN_CODE 77)
 endif()
 
-# Per-utterance OUTPUT_TRUNCATED in transcribe_run_batch (moonshine_streaming).
+# moonshine_streaming input cap (81.92 s, the adapter position table): one-shot,
+# run_batch and streaming past it, on the default backend and CPU.
 # Skipped (RC 77) when TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF is unset.
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
-    add_executable(transcribe_moonshine_streaming_batch_truncation
-        moonshine_streaming_batch_truncation.cpp)
+    add_executable(transcribe_moonshine_streaming_input_cap
+        moonshine_streaming_input_cap.cpp)
 
-    target_link_libraries(transcribe_moonshine_streaming_batch_truncation
+    target_link_libraries(transcribe_moonshine_streaming_input_cap
         PRIVATE transcribe transcribe-common-example)
 
-    target_compile_definitions(transcribe_moonshine_streaming_batch_truncation PRIVATE
+    target_compile_definitions(transcribe_moonshine_streaming_input_cap PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
 
-    transcribe_apply_warnings(transcribe_moonshine_streaming_batch_truncation)
+    transcribe_apply_warnings(transcribe_moonshine_streaming_input_cap)
 
-    add_test(NAME transcribe_moonshine_streaming_batch_truncation
-        COMMAND transcribe_moonshine_streaming_batch_truncation)
-    set_tests_properties(transcribe_moonshine_streaming_batch_truncation PROPERTIES
+    add_test(NAME transcribe_moonshine_streaming_input_cap
+        COMMAND transcribe_moonshine_streaming_input_cap)
+    set_tests_properties(transcribe_moonshine_streaming_input_cap PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 
 # Per-utterance OUTPUT_TRUNCATED in transcribe_run / transcribe_run_batch for a
 # causal_lm (LLM-decoder) family. Guards the shared src/causal_lm batched step
-# loop's truncation detection (the encoder-decoder twin is covered by
-# transcribe_moonshine_streaming_batch_truncation). Skipped (RC 77) when
+# loop's truncation detection. Skipped (RC 77) when
 # TRANSCRIBE_QWEN3_ASR_0_6B_GGUF is unset.
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_qwen3_asr_batch_truncation
